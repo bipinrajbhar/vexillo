@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { db } from '@/lib/db';
+import { flags, environments, flagStates, apiKeys } from '@/lib/schema';
+import { eq, and, desc, asc, sql } from 'drizzle-orm';
+import { hashKey } from '@/lib/api-key';
 
 function slugify(name: string): string {
   return name
@@ -9,27 +12,72 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-export async function GET() {
-  const rows = await sql`
-    SELECT
-      f.id, f.name, f.key, f.description, f.created_at,
-      e.id   AS env_id,
-      e.slug AS env_slug,
-      COALESCE(fs.enabled, false) AS enabled
-    FROM flags f
-    CROSS JOIN environments e
-    LEFT JOIN flag_states fs
-      ON fs.flag_id = f.id AND fs.environment_id = e.id
-    ORDER BY f.created_at DESC, e.name
-  `;
+export async function GET(req: NextRequest) {
+  const authHeader = req.headers.get('authorization');
 
-  const environments = await sql`
-    SELECT id, name, slug FROM environments ORDER BY name
-  `;
+  // SDK path: Authorization: Bearer sdk-xxx
+  if (authHeader) {
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const hash = await hashKey(token);
+    const [apiKey] = await db
+      .select({ environmentId: apiKeys.environmentId })
+      .from(apiKeys)
+      .where(eq(apiKeys.keyHash, hash))
+      .limit(1);
+
+    if (!apiKey) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const rows = await db
+      .select({
+        key: flags.key,
+        enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
+      })
+      .from(flags)
+      .leftJoin(
+        flagStates,
+        and(
+          eq(flagStates.flagId, flags.id),
+          eq(flagStates.environmentId, apiKey.environmentId),
+        ),
+      )
+      .orderBy(asc(flags.key));
+
+    return NextResponse.json({
+      flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
+    });
+  }
+
+  // Dashboard path: no auth header — return all flags with per-environment states
+  const [rows, envRows] = await Promise.all([
+    db
+      .select({
+        id: flags.id,
+        name: flags.name,
+        key: flags.key,
+        description: flags.description,
+        createdAt: flags.createdAt,
+        envSlug: environments.slug,
+        enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
+      })
+      .from(flags)
+      .crossJoin(environments)
+      .leftJoin(
+        flagStates,
+        and(eq(flagStates.flagId, flags.id), eq(flagStates.environmentId, environments.id)),
+      )
+      .orderBy(desc(flags.createdAt), asc(environments.name)),
+
+    db
+      .select({ id: environments.id, name: environments.name, slug: environments.slug })
+      .from(environments)
+      .orderBy(asc(environments.name)),
+  ]);
 
   const flagMap = new Map<string, {
     id: string; name: string; key: string; description: string;
-    createdAt: string; states: Record<string, boolean>;
+    createdAt: Date; states: Record<string, boolean>;
   }>();
 
   for (const row of rows) {
@@ -39,17 +87,14 @@ export async function GET() {
         name: row.name,
         key: row.key,
         description: row.description,
-        createdAt: row.created_at,
+        createdAt: row.createdAt,
         states: {},
       });
     }
-    flagMap.get(row.key)!.states[row.env_slug] = row.enabled;
+    flagMap.get(row.key)!.states[row.envSlug] = row.enabled;
   }
 
-  return NextResponse.json({
-    flags: Array.from(flagMap.values()),
-    environments,
-  });
+  return NextResponse.json({ flags: Array.from(flagMap.values()), environments: envRows });
 }
 
 export async function POST(req: NextRequest) {
@@ -58,25 +103,19 @@ export async function POST(req: NextRequest) {
   const description: string = body.description?.trim() ?? '';
   const key: string = body.key?.trim() || slugify(name);
 
-  if (!name) {
-    return NextResponse.json({ error: 'Name is required' }, { status: 400 });
-  }
-  if (!key) {
-    return NextResponse.json({ error: 'Invalid key' }, { status: 400 });
-  }
+  if (!name) return NextResponse.json({ error: 'Name is required' }, { status: 400 });
+  if (!key) return NextResponse.json({ error: 'Invalid key' }, { status: 400 });
 
   try {
-    const [flag] = await sql`
-      INSERT INTO flags (name, key, description)
-      VALUES (${name}, ${key}, ${description})
-      RETURNING *
-    `;
+    const [flag] = await db.insert(flags).values({ name, key, description }).returning();
 
-    await sql`
-      INSERT INTO flag_states (flag_id, environment_id, enabled)
-      SELECT ${flag.id}, id, false FROM environments
-      ON CONFLICT DO NOTHING
-    `;
+    const envs = await db.select({ id: environments.id }).from(environments);
+    if (envs.length > 0) {
+      await db
+        .insert(flagStates)
+        .values(envs.map((env) => ({ flagId: flag.id, environmentId: env.id, enabled: false })))
+        .onConflictDoNothing();
+    }
 
     return NextResponse.json({ flag }, { status: 201 });
   } catch (err: unknown) {

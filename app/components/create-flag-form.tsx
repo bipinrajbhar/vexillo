@@ -1,6 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 function slugify(name: string): string {
   return name
@@ -25,9 +29,7 @@ export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
 
   function handleNameChange(value: string) {
     setName(value);
-    if (!keyEdited) {
-      setKey(slugify(value));
-    }
+    if (!keyEdited) setKey(slugify(value));
   }
 
   function handleKeyChange(value: string) {
@@ -49,65 +51,58 @@ export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-gray-50 border border-gray-200 rounded-lg p-6 space-y-4">
-      <h2 className="font-semibold text-gray-900">Create Flag</h2>
+    <form onSubmit={handleSubmit} className="border rounded-lg p-6 space-y-4 bg-card">
+      <h2 className="font-semibold">Create Flag</h2>
 
       {error && (
-        <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</p>
+        <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
+          {error}
+        </p>
       )}
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-        <input
-          type="text"
+      <div className="space-y-1.5">
+        <Label htmlFor="flag-name">Name</Label>
+        <Input
+          id="flag-name"
           value={name}
           onChange={(e) => handleNameChange(e.target.value)}
           required
           autoFocus
           placeholder="My New Feature"
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Key</label>
-        <input
-          type="text"
+      <div className="space-y-1.5">
+        <Label htmlFor="flag-key">Key</Label>
+        <Input
+          id="flag-key"
           value={key}
           onChange={(e) => handleKeyChange(e.target.value)}
           required
           placeholder="my-new-feature"
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="font-mono"
         />
-        <p className="text-xs text-gray-500 mt-1">Auto-generated from name. Immutable after creation.</p>
+        <p className="text-xs text-muted-foreground">Auto-generated from name. Immutable after creation.</p>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-        <textarea
+      <div className="space-y-1.5">
+        <Label htmlFor="flag-description">Description</Label>
+        <Textarea
+          id="flag-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
           placeholder="What does this flag control?"
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
 
       <div className="flex gap-3">
-        <button
-          type="submit"
-          disabled={submitting}
-          className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
+        <Button type="submit" disabled={submitting}>
           {submitting ? 'Creating…' : 'Create Flag'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-gray-600 hover:text-gray-900 px-4 py-2 rounded-md text-sm"
-        >
+        </Button>
+        <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );

@@ -2,6 +2,16 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import CreateFlagForm from './components/create-flag-form';
 
 interface Environment {
@@ -61,7 +71,7 @@ export default function FlagsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen text-gray-400 text-sm">
+      <div className="flex items-center justify-center min-h-[60vh] text-muted-foreground text-sm">
         Loading…
       </div>
     );
@@ -71,15 +81,14 @@ export default function FlagsPage() {
     <div className="max-w-5xl mx-auto px-6 py-10">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Feature Flags</h1>
-          <p className="text-sm text-gray-500 mt-1">{flags.length} flag{flags.length !== 1 ? 's' : ''}</p>
+          <h1 className="text-2xl font-bold">Feature Flags</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {flags.length} flag{flags.length !== 1 ? 's' : ''}
+          </p>
         </div>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition-colors"
-        >
+        <Button onClick={() => setShowForm((v) => !v)} variant={showForm ? 'outline' : 'default'}>
           {showForm ? 'Cancel' : 'New Flag'}
-        </button>
+        </Button>
       </div>
 
       {showForm && (
@@ -89,68 +98,66 @@ export default function FlagsPage() {
       )}
 
       {flags.length === 0 ? (
-        <div className="text-center py-20 text-gray-400">
-          <p className="text-lg mb-1">No flags yet</p>
+        <div className="text-center py-20 text-muted-foreground">
+          <p className="text-base mb-1">No flags yet</p>
           <p className="text-sm">Create your first flag to get started.</p>
         </div>
       ) : (
-        <div className="border border-gray-200 rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Key</th>
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Key</TableHead>
                 {environments.map((env) => (
-                  <th key={env.id} className="text-left px-4 py-3 font-medium text-gray-600 capitalize">
-                    {env.name}
-                  </th>
+                  <TableHead key={env.id} className="capitalize">{env.name}</TableHead>
                 ))}
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {flags.map((flag) => (
-                <tr key={flag.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-3">
+                <TableRow key={flag.id}>
+                  <TableCell>
                     <Link
                       href={`/flags/${flag.key}`}
-                      className="font-medium text-gray-900 hover:text-blue-600"
+                      className="font-medium hover:underline"
                     >
                       {flag.name}
                     </Link>
                     {flag.description && (
-                      <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">{flag.description}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-xs">
+                        {flag.description}
+                      </p>
                     )}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">{flag.key}</td>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {flag.key}
+                  </TableCell>
                   {environments.map((env) => (
-                    <td key={env.id} className="px-4 py-3">
+                    <TableCell key={env.id}>
                       {flag.states[env.slug] ? (
-                        <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded text-xs font-medium">
-                          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                          On
-                        </span>
+                        <Badge variant="default" className="bg-green-600 hover:bg-green-600">On</Badge>
                       ) : (
-                        <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-500 border border-gray-200 px-2 py-0.5 rounded text-xs font-medium">
-                          <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-                          Off
-                        </span>
+                        <Badge variant="secondary">Off</Badge>
                       )}
-                    </td>
+                    </TableCell>
                   ))}
-                  <td className="px-4 py-3 text-right">
-                    <button
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => handleDelete(flag.key)}
                       disabled={deletingKey === flag.key}
-                      className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-40 transition-colors"
+                      className="text-muted-foreground hover:text-destructive"
                     >
                       {deletingKey === flag.key ? 'Deleting…' : 'Delete'}
-                    </button>
-                  </td>
-                </tr>
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>

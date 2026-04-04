@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { db } from '@/lib/db';
+import { flags, flagStates } from '@/lib/schema';
+import { eq, sql } from 'drizzle-orm';
 
 export async function PUT(
   req: NextRequest,
@@ -12,18 +14,19 @@ export async function PUT(
     return NextResponse.json({ error: 'environmentId is required' }, { status: 400 });
   }
 
-  const [flag] = await sql`SELECT id FROM flags WHERE key = ${key}`;
+  const [flag] = await db.select({ id: flags.id }).from(flags).where(eq(flags.key, key));
   if (!flag) {
     return NextResponse.json({ error: 'Flag not found' }, { status: 404 });
   }
 
-  const [state] = await sql`
-    INSERT INTO flag_states (flag_id, environment_id, enabled)
-    VALUES (${flag.id}, ${environmentId}, true)
-    ON CONFLICT (flag_id, environment_id) DO UPDATE
-      SET enabled = NOT flag_states.enabled
-    RETURNING enabled
-  `;
+  const [state] = await db
+    .insert(flagStates)
+    .values({ flagId: flag.id, environmentId, enabled: true })
+    .onConflictDoUpdate({
+      target: [flagStates.flagId, flagStates.environmentId],
+      set: { enabled: sql`NOT ${flagStates.enabled}` },
+    })
+    .returning({ enabled: flagStates.enabled });
 
   return NextResponse.json({ enabled: state.enabled });
 }
