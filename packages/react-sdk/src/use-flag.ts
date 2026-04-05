@@ -12,7 +12,7 @@ import { useVexilloContext } from "./provider";
 export function useFlag(key: string): boolean {
   const { flags, fallbacks } = useVexilloContext();
 
-  if (flags !== null && key in flags) {
+  if (key in flags) {
     return flags[key];
   }
 
