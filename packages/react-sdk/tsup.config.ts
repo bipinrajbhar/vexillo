@@ -7,5 +7,8 @@ export default defineConfig({
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
+  outExtension({ format }) {
+    return { js: format === "esm" ? ".mjs" : ".cjs" };
+  },
   external: ["react", "react-dom"],
 });

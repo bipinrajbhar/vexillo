@@ -1,6 +1,6 @@
 {
   "name": "@vexillo/react-sdk",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
