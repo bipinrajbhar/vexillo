@@ -1,9 +1,10 @@
 {
-  "name": "@bipinrajbhar/togglr-sdk",
+  "name": "@vexillo/sdk",
   "version": "1.0.0",
   "type": "module",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "exports": {
     ".": {
