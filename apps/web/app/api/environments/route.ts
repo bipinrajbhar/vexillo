@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { environments, apiKeys, flags, flagStates } from '@/lib/schema';
 import { eq, asc } from 'drizzle-orm';
 import { generateApiKey, hashKey, maskKey } from '@/lib/api-key';
+import { auth } from '@/lib/auth';
 
 export async function GET() {
   try {
@@ -11,6 +13,7 @@ export async function GET() {
         id: environments.id,
         name: environments.name,
         slug: environments.slug,
+        allowedOrigins: environments.allowedOrigins,
         createdAt: environments.createdAt,
         keyHint: apiKeys.keyHint,
       })
@@ -26,6 +29,10 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.user.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const body = await req.json();
   const name: string = body.name?.trim() ?? '';
 

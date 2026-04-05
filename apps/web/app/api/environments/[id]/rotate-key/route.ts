@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { environments, apiKeys } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
 import { generateApiKey, hashKey, maskKey } from '@/lib/api-key';
+import { auth } from '@/lib/auth';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.user.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const { id } = await params;
 
   const [env] = await db.select({ id: environments.id }).from(environments).where(eq(environments.id, id));
