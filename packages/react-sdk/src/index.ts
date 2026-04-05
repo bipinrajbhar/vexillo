@@ -1,4 +1,4 @@
-// @vexillo/sdk/react — React bindings
+// @vexillo/react-sdk — React bindings
 
 export { VexilloProvider } from "./provider";
 export type { VexilloProviderProps } from "./provider";

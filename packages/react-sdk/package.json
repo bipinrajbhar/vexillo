@@ -1,5 +1,5 @@
 {
-  "name": "@vexillo/sdk",
+  "name": "@vexillo/react-sdk",
   "version": "1.0.0",
   "type": "module",
   "publishConfig": {
@@ -11,11 +11,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
-    },
-    "./react": {
-      "types": "./dist/react/index.d.ts",
-      "import": "./dist/react/index.mjs",
-      "require": "./dist/react/index.cjs"
     }
   },
   "files": [
