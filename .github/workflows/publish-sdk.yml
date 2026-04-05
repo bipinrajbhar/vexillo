@@ -28,6 +28,7 @@ jobs:
         run: pnpm --filter @vexillo/react-sdk build
 
       - name: Publish to npm
-        run: pnpm --filter @vexillo/react-sdk publish --no-git-checks
+        working-directory: packages/react-sdk
+        run: pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
