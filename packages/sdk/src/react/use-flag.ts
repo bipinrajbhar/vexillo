@@ -1,4 +1,4 @@
-import { useTogglrContext } from "./provider";
+import { useVexilloContext } from "./provider";
 
 /**
  * Returns the current boolean value for a feature flag key.
@@ -7,10 +7,10 @@ import { useTogglrContext } from "./provider";
  *   from `fallbacks`, or `false` if the key is absent.
  * - After the fetch resolves, returns the live value from the API, falling
  *   back to `fallbacks[key] ?? false` for keys not present in the response.
- * - Throws if called outside a `<TogglrProvider>`.
+ * - Throws if called outside a `<VexilloProvider>`.
  */
 export function useFlag(key: string): boolean {
-  const { flags, fallbacks } = useTogglrContext();
+  const { flags, fallbacks } = useVexilloContext();
 
   if (flags !== null && key in flags) {
     return flags[key];

@@ -1,14 +1,14 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React, { Component, type ReactNode } from "react";
-import { TogglrProvider } from "../provider";
+import { VexilloProvider } from "../provider";
 import { useFlag } from "../use-flag";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const BASE_URL = "https://togglr.example.com";
+const BASE_URL = "https://vexillo.example.com";
 const API_KEY = "sdk-test-key";
 const ENVIRONMENT = "production";
 
@@ -70,19 +70,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("TogglrProvider", () => {
+describe("VexilloProvider", () => {
   it("calls fetch exactly once on mount with the correct URL and apiKey", async () => {
     const mockFetch = makeFetchOk([]);
     vi.stubGlobal("fetch", mockFetch);
 
     render(
-      <TogglrProvider
+      <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
         environment={ENVIRONMENT}
       >
         <div />
-      </TogglrProvider>,
+      </VexilloProvider>,
     );
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
@@ -104,14 +104,14 @@ describe("TogglrProvider", () => {
     );
 
     render(
-      <TogglrProvider
+      <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
         environment={ENVIRONMENT}
       >
         <FlagConsumer flagKey="dark-mode" />
         <FlagConsumer flagKey="new-checkout" />
-      </TogglrProvider>,
+      </VexilloProvider>,
     );
 
     await waitFor(() =>
@@ -128,14 +128,14 @@ describe("TogglrProvider", () => {
     );
 
     render(
-      <TogglrProvider
+      <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
         environment={ENVIRONMENT}
         fallbacks={{ "beta-feature": true }}
       >
         <FlagConsumer flagKey="beta-feature" />
-      </TogglrProvider>,
+      </VexilloProvider>,
     );
 
     // Immediately after mount, before fetch resolves.
@@ -150,13 +150,13 @@ describe("TogglrProvider", () => {
 
     render(
       <ErrorBoundary>
-        <TogglrProvider
+        <VexilloProvider
           baseUrl={BASE_URL}
           apiKey={API_KEY}
           environment={ENVIRONMENT}
         >
           <div />
-        </TogglrProvider>
+        </VexilloProvider>
       </ErrorBoundary>,
     );
 
@@ -173,13 +173,13 @@ describe("TogglrProvider", () => {
 
     render(
       <ErrorBoundary>
-        <TogglrProvider
+        <VexilloProvider
           baseUrl={BASE_URL}
           apiKey={API_KEY}
           environment={ENVIRONMENT}
         >
           <div />
-        </TogglrProvider>
+        </VexilloProvider>
       </ErrorBoundary>,
     );
 

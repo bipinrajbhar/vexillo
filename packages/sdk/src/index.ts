@@ -1,2 +1,2 @@
-// @togglr/sdk — core entry point
-// React bindings are available via @togglr/sdk/react
+// @vexillo/sdk — core entry point
+// React bindings are available via @vexillo/sdk/react

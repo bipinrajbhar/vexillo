@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import React from "react";
-import { TogglrContext } from "../provider";
+import { VexilloContext } from "../provider";
 import { useFlag } from "../use-flag";
 
 // Helper: renders a component that reads a flag and displays it.
@@ -16,9 +16,9 @@ function renderWithFlags(
   fallbacks: Record<string, boolean> = {},
 ) {
   return render(
-    <TogglrContext.Provider value={{ flags, fallbacks }}>
+    <VexilloContext.Provider value={{ flags, fallbacks }}>
       <FlagDisplay flagKey={flagKey} />
-    </TogglrContext.Provider>,
+    </VexilloContext.Provider>,
   );
 }
 
@@ -48,11 +48,11 @@ describe("useFlag", () => {
     expect(screen.getByTestId("value").textContent).toBe("false");
   });
 
-  it("throws a clear error when called outside a TogglrProvider", () => {
+  it("throws a clear error when called outside a VexilloProvider", () => {
     // Suppress React's expected console.error output for error boundaries.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<FlagDisplay flagKey="any" />)).toThrow(
-      "useFlag must be called inside a <TogglrProvider>.",
+      "useFlag must be called inside a <VexilloProvider>.",
     );
     spy.mockRestore();
   });

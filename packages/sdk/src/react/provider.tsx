@@ -6,15 +6,15 @@ import {
   type ReactNode,
 } from "react";
 
-export interface TogglrContextValue {
+export interface VexilloContextValue {
   flags: Record<string, boolean> | null;
   fallbacks: Record<string, boolean>;
 }
 
-export const TogglrContext = createContext<TogglrContextValue | null>(null);
+export const VexilloContext = createContext<VexilloContextValue | null>(null);
 
-export interface TogglrProviderProps {
-  /** Base URL of your Togglr deployment (e.g. "https://togglr.example.com") */
+export interface VexilloProviderProps {
+  /** Base URL of your Vexillo deployment (e.g. "https://vexillo.example.com") */
   baseUrl: string;
   /** SDK API key for the target environment */
   apiKey: string;
@@ -25,12 +25,12 @@ export interface TogglrProviderProps {
   children: ReactNode;
 }
 
-export function TogglrProvider({
+export function VexilloProvider({
   baseUrl,
   apiKey,
   fallbacks = {},
   children,
-}: TogglrProviderProps): ReactNode {
+}: VexilloProviderProps): ReactNode {
   const [flags, setFlags] = useState<Record<string, boolean> | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
@@ -43,7 +43,7 @@ export function TogglrProvider({
       .then((res) => {
         if (!res.ok) {
           throw new Error(
-            `Togglr: API responded with status ${res.status} ${res.statusText}`,
+            `Vexillo: API responded with status ${res.status} ${res.statusText}`,
           );
         }
         return res.json() as Promise<{
@@ -63,7 +63,7 @@ export function TogglrProvider({
         setError(
           err instanceof Error
             ? err
-            : new Error(`Togglr: unexpected error — ${String(err)}`),
+            : new Error(`Vexillo: unexpected error — ${String(err)}`),
         );
       });
 
@@ -75,17 +75,17 @@ export function TogglrProvider({
   if (error) throw error;
 
   return (
-    <TogglrContext.Provider value={{ flags, fallbacks }}>
+    <VexilloContext.Provider value={{ flags, fallbacks }}>
       {children}
-    </TogglrContext.Provider>
+    </VexilloContext.Provider>
   );
 }
 
 /** @internal — exported for use-flag.ts only */
-export function useTogglrContext(): TogglrContextValue {
-  const ctx = useContext(TogglrContext);
+export function useVexilloContext(): VexilloContextValue {
+  const ctx = useContext(VexilloContext);
   if (ctx === null) {
-    throw new Error("useFlag must be called inside a <TogglrProvider>.");
+    throw new Error("useFlag must be called inside a <VexilloProvider>.");
   }
   return ctx;
 }

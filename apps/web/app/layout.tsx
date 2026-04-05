@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Togglr",
+  title: "Vexillo",
   description: "Internal feature flag management",
 };
 
@@ -27,7 +27,7 @@ export default function RootLayout({
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-white text-gray-900">
         <header className="border-b border-gray-200 px-6 py-3 flex items-center gap-8">
-          <span className="font-bold text-gray-900 tracking-tight">togglr</span>
+          <span className="font-bold text-gray-900 tracking-tight">vexillo</span>
           <nav className="flex gap-6 text-sm">
             <Link href="/" className="text-gray-600 hover:text-gray-900 transition-colors">
               Flags

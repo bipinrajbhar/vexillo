@@ -1,5 +1,5 @@
-// @togglr/sdk/react — React bindings
-// Implementation in Phase 3
+// @vexillo/sdk/react — React bindings
 
-export { TogglrProvider } from "./provider";
+export { VexilloProvider } from "./provider";
+export type { VexilloProviderProps } from "./provider";
 export { useFlag } from "./use-flag";
