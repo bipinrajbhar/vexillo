@@ -49,7 +49,8 @@ export default function App() {
 import { useFlag } from "@vexillo/react-sdk";
 
 export function CheckoutButton() {
-  const newCheckout = useFlag("new-checkout");
+  const [newCheckout, isLoading] = useFlag("new-checkout");
+  if (isLoading) return null;
   return newCheckout ? <NewCheckout /> : <OldCheckout />;
 }
 ```
@@ -204,11 +205,20 @@ The error from the most recent failed `load()`, or `null`.
 
 ---
 
-### `useFlag(key, defaultValue?): boolean`
+### `useFlag(key, defaultValue?): [value, isLoading]`
 
-Returns the current value of a feature flag. Falls back to `defaultValue` then `false` for unknown keys or while the client is loading. Re-renders only when this specific key's value changes. Must be called inside a `<VexilloClientProvider>`.
+Returns `[boolean, boolean]` — the current flag value and a loading indicator.
 
-If you need to gate on whether flags have loaded yet, use `useVexilloClient()` and check `client.isReady`.
+- `value` — current flag value. Falls back to `defaultValue` then `false` for unknown keys or while the client is loading.
+- `isLoading` — `true` until the client has loaded at least once. Use this to suppress flag-gated UI until flags are known, avoiding flash-of-wrong-content in SPAs.
+- Re-renders only when this specific key's value changes.
+- Must be called inside a `<VexilloClientProvider>`.
+
+```tsx
+const [newCheckout, isLoading] = useFlag("new-checkout");
+if (isLoading) return null; // or a skeleton
+return newCheckout ? <NewCheckout /> : <OldCheckout />;
+```
 
 ---
 

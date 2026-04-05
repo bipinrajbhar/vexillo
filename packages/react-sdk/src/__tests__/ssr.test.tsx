@@ -9,7 +9,7 @@ import { createMockVexilloClient } from "../testing";
 import { useFlag } from "../use-flag";
 
 function Child({ flagKey }: { flagKey: string }) {
-  const value = useFlag(flagKey);
+  const [value] = useFlag(flagKey);
   return <div>{String(value)}</div>;
 }
 

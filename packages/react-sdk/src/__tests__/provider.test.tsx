@@ -33,7 +33,7 @@ function makeFetchNetworkError() {
 }
 
 function FlagConsumer({ flagKey }: { flagKey: string }) {
-  const value = useFlag(flagKey);
+  const [value] = useFlag(flagKey);
   return <span data-testid={`flag-${flagKey}`}>{String(value)}</span>;
 }
 

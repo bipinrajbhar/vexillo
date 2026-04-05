@@ -4,10 +4,15 @@ import React from "react";
 import { VexilloClientProvider } from "../provider";
 import { useFlag } from "../use-flag";
 import { createMockVexilloClient } from "../testing";
+import { createVexilloClient } from "../client";
 
 function FlagDisplay({ flagKey }: { flagKey: string }) {
-  const value = useFlag(flagKey);
-  return <span data-testid="value">{String(value)}</span>;
+  const [value, isLoading] = useFlag(flagKey);
+  return (
+    <span data-testid="value" data-loading={String(isLoading)}>
+      {String(value)}
+    </span>
+  );
 }
 
 function renderWithFlags(
@@ -37,6 +42,25 @@ describe("useFlag", () => {
   it("returns the fallback value for a key absent from remote flags", () => {
     renderWithFlags("beta-feature", { "other-flag": false }, { "beta-feature": true });
     expect(screen.getByTestId("value").textContent).toBe("true");
+  });
+
+  it("isLoading is false when client is ready", () => {
+    renderWithFlags("dark-mode", { "dark-mode": true });
+    expect(screen.getByTestId("value").dataset.loading).toBe("false");
+  });
+
+  it("isLoading is true while client is not ready", () => {
+    const client = createVexilloClient({
+      baseUrl: "http://mock.invalid",
+      apiKey: "mock",
+    });
+    render(
+      <VexilloClientProvider client={client} autoLoad={false}>
+        <FlagDisplay flagKey="some-flag" />
+      </VexilloClientProvider>,
+    );
+    expect(screen.getByTestId("value").dataset.loading).toBe("true");
+    expect(screen.getByTestId("value").textContent).toBe("false");
   });
 
   it("throws a clear error when called outside a VexilloClientProvider", () => {
