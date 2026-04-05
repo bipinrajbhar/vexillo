@@ -10,7 +10,6 @@ import { useFlag } from "../use-flag";
 
 const BASE_URL = "https://vexillo.example.com";
 const API_KEY = "sdk-test-key";
-const ENVIRONMENT = "production";
 
 function makeFetchOk(flags: Array<{ key: string; enabled: boolean }>) {
   return vi.fn().mockResolvedValueOnce({
@@ -79,7 +78,6 @@ describe("VexilloProvider", () => {
       <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
-        environment={ENVIRONMENT}
       >
         <div />
       </VexilloProvider>,
@@ -107,7 +105,6 @@ describe("VexilloProvider", () => {
       <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
-        environment={ENVIRONMENT}
       >
         <FlagConsumer flagKey="dark-mode" />
         <FlagConsumer flagKey="new-checkout" />
@@ -131,7 +128,6 @@ describe("VexilloProvider", () => {
       <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
-        environment={ENVIRONMENT}
         fallbacks={{ "beta-feature": true }}
       >
         <FlagConsumer flagKey="beta-feature" />
@@ -153,7 +149,6 @@ describe("VexilloProvider", () => {
         <VexilloProvider
           baseUrl={BASE_URL}
           apiKey={API_KEY}
-          environment={ENVIRONMENT}
         >
           <div />
         </VexilloProvider>
@@ -176,7 +171,6 @@ describe("VexilloProvider", () => {
         <VexilloProvider
           baseUrl={BASE_URL}
           apiKey={API_KEY}
-          environment={ENVIRONMENT}
         >
           <div />
         </VexilloProvider>
