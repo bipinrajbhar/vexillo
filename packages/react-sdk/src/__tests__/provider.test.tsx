@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import React, { Component, type ReactNode } from "react";
-import { VexilloProvider } from "../provider";
+import React, { Suspense } from "react";
+import { VexilloProvider, clearFlagCache } from "../provider";
 import { useFlag } from "../use-flag";
 
 // ---------------------------------------------------------------------------
@@ -12,48 +12,39 @@ const BASE_URL = "https://vexillo.example.com";
 const API_KEY = "sdk-test-key";
 
 function makeFetchOk(flags: Array<{ key: string; enabled: boolean }>) {
-  return vi.fn().mockResolvedValueOnce({
+  return vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({ flags }),
   } as unknown as Response);
 }
 
 function makeFetchHttpError(status: number) {
-  return vi.fn().mockResolvedValueOnce({
+  return vi.fn().mockResolvedValue({
     ok: false,
     status,
     statusText: "Error",
-    json: async () => ({}),
   } as unknown as Response);
 }
 
 function makeFetchNetworkError() {
-  return vi.fn().mockRejectedValueOnce(new Error("Network failure"));
+  return vi.fn().mockRejectedValue(new Error("Network failure"));
 }
 
-/** Simple error boundary that captures errors thrown during render. */
-class ErrorBoundary extends Component<
-  { children: ReactNode },
-  { error: Error | null }
-> {
-  state = { error: null };
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-  render() {
-    if (this.state.error) {
-      return (
-        <div data-testid="boundary-error">{this.state.error.message}</div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-/** Renders a component that reads a flag and shows its value. */
 function FlagConsumer({ flagKey }: { flagKey: string }) {
   const value = useFlag(flagKey);
   return <span data-testid={`flag-${flagKey}`}>{String(value)}</span>;
+}
+
+async function renderWithSuspense(ui: React.ReactNode) {
+  let result: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(
+      <Suspense fallback={<div data-testid="loading">loading</div>}>
+        {ui}
+      </Suspense>,
+    );
+  });
+  return result!;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,30 +52,79 @@ function FlagConsumer({ flagKey }: { flagKey: string }) {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", undefined);
+  clearFlagCache();
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-describe("VexilloProvider", () => {
-  it("calls fetch exactly once on mount with the correct URL and apiKey", async () => {
-    const mockFetch = makeFetchOk([]);
-    vi.stubGlobal("fetch", mockFetch);
+describe("VexilloProvider — initialFlags (synchronous / renderToString path)", () => {
+  it("renders immediately with provided flags, no fetch", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     render(
       <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
+        initialFlags={{ "dark-mode": true }}
       >
+        <FlagConsumer flagKey="dark-mode" />
+      </VexilloProvider>,
+    );
+
+    expect(screen.getByTestId("flag-dark-mode").textContent).toBe("true");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns fallback for keys absent in initialFlags", () => {
+    render(
+      <VexilloProvider
+        baseUrl={BASE_URL}
+        apiKey={API_KEY}
+        initialFlags={{}}
+        fallbacks={{ "beta-feature": true }}
+      >
+        <FlagConsumer flagKey="beta-feature" />
+      </VexilloProvider>,
+    );
+
+    expect(screen.getByTestId("flag-beta-feature").textContent).toBe("true");
+  });
+});
+
+describe("VexilloProvider — fetch path (Suspense / SPA / streaming SSR)", () => {
+  it("suspends then renders fetched flag values", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      makeFetchOk([
+        { key: "dark-mode", enabled: true },
+        { key: "new-checkout", enabled: false },
+      ]),
+    );
+
+    await renderWithSuspense(
+      <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY}>
+        <FlagConsumer flagKey="dark-mode" />
+        <FlagConsumer flagKey="new-checkout" />
+      </VexilloProvider>,
+    );
+
+    expect(screen.getByTestId("flag-dark-mode").textContent).toBe("true");
+    expect(screen.getByTestId("flag-new-checkout").textContent).toBe("false");
+  });
+
+  it("calls fetch with the correct URL and Authorization header", async () => {
+    const mockFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(makeFetchOk([]));
+
+    await renderWithSuspense(
+      <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY}>
         <div />
       </VexilloProvider>,
     );
 
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
-
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/api/flags`);
     expect((init?.headers as Record<string, string>)?.["Authorization"]).toBe(
@@ -92,93 +132,61 @@ describe("VexilloProvider", () => {
     );
   });
 
-  it("populates context so useFlag returns fetched values", async () => {
-    vi.stubGlobal(
-      "fetch",
-      makeFetchOk([
-        { key: "dark-mode", enabled: true },
-        { key: "new-checkout", enabled: false },
-      ]),
-    );
+  it("silently falls back to fallbacks on HTTP error", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation(makeFetchHttpError(401));
 
-    render(
+    await renderWithSuspense(
       <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
+        fallbacks={{ "some-flag": true }}
       >
-        <FlagConsumer flagKey="dark-mode" />
-        <FlagConsumer flagKey="new-checkout" />
+        <FlagConsumer flagKey="some-flag" />
       </VexilloProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByTestId("flag-dark-mode").textContent).toBe("true"),
-    );
-    expect(screen.getByTestId("flag-new-checkout").textContent).toBe("false");
+    expect(screen.getByTestId("flag-some-flag").textContent).toBe("true");
   });
 
-  it("returns fallback values before the fetch resolves", () => {
-    // Never resolves — simulates a slow network.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockReturnValue(new Promise(() => {})),
-    );
+  it("silently falls back to fallbacks on network error", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation(makeFetchNetworkError());
 
-    render(
+    await renderWithSuspense(
       <VexilloProvider
         baseUrl={BASE_URL}
         apiKey={API_KEY}
-        fallbacks={{ "beta-feature": true }}
+        fallbacks={{ "some-flag": true }}
       >
-        <FlagConsumer flagKey="beta-feature" />
+        <FlagConsumer flagKey="some-flag" />
       </VexilloProvider>,
     );
 
-    // Immediately after mount, before fetch resolves.
-    expect(screen.getByTestId("flag-beta-feature").textContent).toBe("true");
+    expect(screen.getByTestId("flag-some-flag").textContent).toBe("true");
   });
 
-  it("throws when fetch rejects with a network error", async () => {
-    vi.stubGlobal("fetch", makeFetchNetworkError());
-    const consoleSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+  it("uses cached Promise on re-render — fetch called only once", async () => {
+    const mockFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(makeFetchOk([{ key: "x", enabled: true }]));
 
-    render(
-      <ErrorBoundary>
-        <VexilloProvider
-          baseUrl={BASE_URL}
-          apiKey={API_KEY}
-        >
-          <div />
-        </VexilloProvider>
-      </ErrorBoundary>,
+    const { rerender } = await renderWithSuspense(
+      <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY}>
+        <FlagConsumer flagKey="x" />
+      </VexilloProvider>,
     );
 
-    const el = await screen.findByTestId("boundary-error");
-    expect(el.textContent).toMatch(/Network failure/);
-    consoleSpy.mockRestore();
-  });
+    await act(async () => {
+      rerender(
+        <Suspense fallback={null}>
+          <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY}>
+            <FlagConsumer flagKey="x" />
+          </VexilloProvider>
+        </Suspense>,
+      );
+    });
 
-  it("throws when the API returns a non-2xx status", async () => {
-    vi.stubGlobal("fetch", makeFetchHttpError(401));
-    const consoleSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-
-    render(
-      <ErrorBoundary>
-        <VexilloProvider
-          baseUrl={BASE_URL}
-          apiKey={API_KEY}
-        >
-          <div />
-        </VexilloProvider>
-      </ErrorBoundary>,
-    );
-
-    const el = await screen.findByTestId("boundary-error");
-    expect(el.textContent).toMatch(/401/);
-    consoleSpy.mockRestore();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

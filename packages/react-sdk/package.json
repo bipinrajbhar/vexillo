@@ -1,6 +1,6 @@
 {
   "name": "@vexillo/react-sdk",
-  "version": "1.0.7",
+  "version": "2.0.0",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -25,8 +25,8 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "react": "^18 || ^19",
-    "react-dom": "^18 || ^19"
+    "react": "^19",
+    "react-dom": "^19"
   },
   "devDependencies": {
     "@testing-library/react": "^16",

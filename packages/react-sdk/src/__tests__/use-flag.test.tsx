@@ -4,7 +4,6 @@ import React from "react";
 import { VexilloContext } from "../provider";
 import { useFlag } from "../use-flag";
 
-// Helper: renders a component that reads a flag and displays it.
 function FlagDisplay({ flagKey }: { flagKey: string }) {
   const value = useFlag(flagKey);
   return <span data-testid="value">{String(value)}</span>;
@@ -12,7 +11,7 @@ function FlagDisplay({ flagKey }: { flagKey: string }) {
 
 function renderWithFlags(
   flagKey: string,
-  flags: Record<string, boolean> | null,
+  flags: Record<string, boolean>,
   fallbacks: Record<string, boolean> = {},
 ) {
   return render(
@@ -38,18 +37,12 @@ describe("useFlag", () => {
     expect(screen.getByTestId("value").textContent).toBe("true");
   });
 
-  it("returns the fallback value before flags have loaded (flags === null)", () => {
-    renderWithFlags("beta-feature", null, { "beta-feature": true });
-    expect(screen.getByTestId("value").textContent).toBe("true");
-  });
-
-  it("returns false before flags have loaded when key is absent from fallbacks", () => {
-    renderWithFlags("missing", null);
+  it("returns false for a key absent from both flags and fallbacks", () => {
+    renderWithFlags("missing", {});
     expect(screen.getByTestId("value").textContent).toBe("false");
   });
 
   it("throws a clear error when called outside a VexilloProvider", () => {
-    // Suppress React's expected console.error output for error boundaries.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<FlagDisplay flagKey="any" />)).toThrow(
       "useFlag must be called inside a <VexilloProvider>.",
