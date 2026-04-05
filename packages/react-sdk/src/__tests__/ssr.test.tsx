@@ -17,7 +17,6 @@ describe("SSR smoke test", () => {
         <VexilloProvider
           baseUrl="https://vexillo.example.com"
           apiKey="sdk-key"
-          environment="production"
           fallbacks={{ "some-flag": true }}
         >
           <Child />
@@ -31,7 +30,6 @@ describe("SSR smoke test", () => {
       <VexilloProvider
         baseUrl="https://vexillo.example.com"
         apiKey="sdk-key"
-        environment="production"
         fallbacks={{ "some-flag": true }}
       >
         <Child />

@@ -1,4 +1,4 @@
-import {
+import React, {
   createContext,
   useContext,
   useEffect,
@@ -18,8 +18,6 @@ export interface VexilloProviderProps {
   baseUrl: string;
   /** SDK API key for the target environment */
   apiKey: string;
-  /** Environment slug — stored in context for consumer reference */
-  environment: string;
   /** Flag values used before the fetch resolves and for unknown keys */
   fallbacks?: Record<string, boolean>;
   children: ReactNode;
@@ -30,7 +28,7 @@ export function VexilloProvider({
   apiKey,
   fallbacks = {},
   children,
-}: VexilloProviderProps): ReactNode {
+}: VexilloProviderProps): React.ReactElement {
   const [flags, setFlags] = useState<Record<string, boolean> | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
