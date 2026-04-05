@@ -1,6 +1,6 @@
 {
-  "name": "@togglr/sdk",
-  "version": "0.1.0",
+  "name": "@bipinrajbhar/togglr-sdk",
+  "version": "1.0.0",
   "type": "module",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -17,7 +17,9 @@
       "require": "./dist/react/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
