@@ -2,10 +2,29 @@
 
 React bindings for [Vexillo](https://vexillo-web.vercel.app) — a self-hosted feature flag service.
 
+---
+
+## Table of contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [SPA](#spa)
+- [Next.js App Router (RSC)](#nextjs-app-router-rsc)
+- [Node.js SSR](#nodejs-ssr)
+- [Fallbacks](#fallbacks)
+- [Overriding flags](#overriding-flags)
+- [Error handling](#error-handling)
+- [Testing](#testing)
+- [API reference](#api-reference)
+
+---
+
 ## Requirements
 
 - React 18 or 19
 - A running Vexillo deployment
+
+---
 
 ## Installation
 
@@ -13,25 +32,29 @@ React bindings for [Vexillo](https://vexillo-web.vercel.app) — a self-hosted f
 npm install @vexillo/react-sdk
 ```
 
-## Usage
+---
 
-Create a client once and pass it to `<VexilloClientProvider>`. Flags are fetched on mount; components read them with `useFlag`.
+## SPA
 
-```tsx
-// vexillo.ts — create once, import anywhere
+For client-side only apps (Create React App, Vite, etc.). Flags are fetched on mount; components read them with `useFlag`.
+
+**1. Create a client**
+
+```ts
+// lib/vexillo.ts
 import { createVexilloClient } from "@vexillo/react-sdk";
 
 export const client = createVexilloClient({
   baseUrl: "https://your-vexillo.example.com",
   apiKey: "your-api-key",
-  fallbacks: { "new-checkout": false },
 });
 ```
 
+**2. Wrap your app**
+
 ```tsx
-// App.tsx
 import { VexilloClientProvider } from "@vexillo/react-sdk";
-import { client } from "./vexillo";
+import { client } from "@/lib/vexillo";
 
 export default function App() {
   return (
@@ -42,137 +65,140 @@ export default function App() {
 }
 ```
 
+**3. Read flags in components**
+
 ```tsx
-// CheckoutButton.tsx
 import { useFlag } from "@vexillo/react-sdk";
 
 export function CheckoutButton() {
   const [newCheckout, isLoading] = useFlag("new-checkout");
+
   if (isLoading) return null;
+
+  return newCheckout ? <NewCheckout /> : <OldCheckout />;
+}
+```
+
+`useFlag` returns `[value, isLoading]`. The component re-renders only when the value of that specific flag changes.
+
+---
+
+## Next.js App Router (RSC)
+
+Fetch flags in your server component with `fetchFlags` and pass them as `initialFlags` to the client. This way flags are embedded in the HTML on the first render — no loading state, no hydration mismatch.
+
+```tsx
+// app/layout.tsx (Server Component)
+import { fetchFlags, createVexilloClient, VexilloClientProvider } from "@vexillo/react-sdk";
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const initialFlags = await fetchFlags(
+    process.env.VEXILLO_BASE_URL!,
+    process.env.VEXILLO_API_KEY!,
+  );
+
+  const client = createVexilloClient({
+    baseUrl: process.env.NEXT_PUBLIC_VEXILLO_BASE_URL!,
+    apiKey: process.env.NEXT_PUBLIC_VEXILLO_API_KEY!,
+    initialFlags,
+  });
+
+  return (
+    <html>
+      <body>
+        <VexilloClientProvider client={client}>
+          {children}
+        </VexilloClientProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+Client components use `useFlag` as normal. Because `initialFlags` is provided, `isLoading` is `false` on the first render:
+
+```tsx
+"use client";
+import { useFlag } from "@vexillo/react-sdk";
+
+export function CheckoutButton() {
+  const [newCheckout, isLoading] = useFlag("new-checkout");
+
+  if (isLoading) return null;
+
   return newCheckout ? <NewCheckout /> : <OldCheckout />;
 }
 ```
 
 ---
 
-## API
+## Node.js SSR
 
-### `createVexilloClient(config)`
+For `renderToString` / `renderToPipeableStream` setups. Use `fetchFlags` before rendering to pre-load flags so the HTML is correct on the first render.
 
-Creates a feature flag client. Use the returned instance as the single source of truth for your app.
+```tsx
+import { renderToString } from "react-dom/server";
+import { fetchFlags, createVexilloClient, VexilloClientProvider } from "@vexillo/react-sdk";
+
+// In your request handler:
+const initialFlags = await fetchFlags(BASE_URL, API_KEY);
+
+const client = createVexilloClient({
+  baseUrl: BASE_URL,
+  apiKey: API_KEY,
+  initialFlags,
+});
+
+const html = renderToString(
+  <VexilloClientProvider client={client}>
+    <App />
+  </VexilloClientProvider>,
+);
+```
+
+> **Note:** If you skip `initialFlags`, flags will not be in the server-rendered HTML. Components will use their fallback values on the server and load real values after hydration.
+
+---
+
+## Fallbacks
+
+Pass a `fallbacks` map to define default values used when a flag is unknown or while the client is still loading.
 
 ```ts
 const client = createVexilloClient({
-  baseUrl: "https://your-vexillo.example.com", // required
-  apiKey: "your-api-key",                       // required
-  initialFlags: { "new-checkout": false },      // optional — skip initial fetch
-  fallbacks: { "new-checkout": false },         // optional — defaults for unknown keys
-  onError: (err) => console.error(err),         // optional — called on load() failure
+  baseUrl: "https://your-vexillo.example.com",
+  apiKey: "your-api-key",
+  fallbacks: {
+    "new-checkout": false,
+    "dark-mode": false,
+  },
 });
 ```
 
-#### `client.load(): Promise<void>`
+Resolution order: **overrides → remote flags → fallbacks → `false`**
 
-Fetches flags from the API and notifies all subscribers. Called automatically by `<VexilloClientProvider>` on mount if the client is not already ready.
+---
 
-#### `client.getFlag(key): boolean`
+## Overriding flags
 
-Synchronous read. Resolution order: overrides → remote → fallbacks → `false`.
-
-#### `client.getAllFlags(): Record<string, boolean>`
-
-Snapshot of all resolved flags (overrides + remote + fallbacks merged).
-
-#### `client.override(flags): void`
-
-Imperatively set flag values and notify subscribers immediately. Use `clearOverride` or `clearOverrides` to undo.
+Use `client.override()` to force flag values at runtime — useful for feature previews, demos, or debugging.
 
 ```ts
+// Turn a flag on
 client.override({ "new-checkout": true });
-// ... later:
+
+// Restore a single flag to its remote value
 client.clearOverride("new-checkout");
-```
 
-#### `client.clearOverride(key): void`
-
-Remove the override for a specific key and notify subscribers.
-
-#### `client.clearOverrides(): void`
-
-Remove all overrides and notify subscribers.
-
-#### `client.subscribe(key, listener): () => void`
-
-Subscribe to changes on a specific flag key. Returns an unsubscribe function.
-
-#### `client.subscribeAll(listener): () => void`
-
-Subscribe to any flag change. Returns an unsubscribe function.
-
-#### `client.isReady: boolean`
-
-`true` once `load()` has resolved (or `initialFlags` was provided at creation).
-
-#### `client.lastError: Error | null`
-
-The error from the most recent failed `load()`, or `null`.
-
----
-
-### `<VexilloClientProvider>`
-
-| Prop | Type | Default | Description |
-|---|---|---|---|
-| `client` | `VexilloClient` | required | The client instance to provide |
-| `children` | `ReactNode` | required | |
-
----
-
-### `useFlag(key): [value, isLoading]`
-
-Returns `[boolean, boolean]` — the current flag value and a loading indicator.
-
-- `value` — current flag value. Falls back to `fallbacks[key]` then `false` for unknown keys or while the client is loading.
-- `isLoading` — `true` until the client has loaded at least once. Use this to suppress flag-gated UI until flags are known, avoiding flash-of-wrong-content.
-- Re-renders only when this specific key's value changes.
-- Must be called inside a `<VexilloClientProvider>`.
-
-```tsx
-const [newCheckout, isLoading] = useFlag("new-checkout");
-if (isLoading) return null; // or a skeleton
-return newCheckout ? <NewCheckout /> : <OldCheckout />;
-```
-
----
-
-### `useVexilloClient(): VexilloClient`
-
-Returns the nearest client from context. Use this escape hatch for imperative access in components (e.g. calling `override()` or `getAllFlags()` directly).
-
----
-
-### `fetchFlags(baseUrl, apiKey): Promise<Record<string, boolean>>`
-
-Low-level fetch helper. Returns a flat flag map, or an empty object on error — never throws. Useful when you need flags outside of a client instance.
-
----
-
-### `createMockVexilloClient(options?)`
-
-Creates a pre-seeded client for tests. `isReady` is `true` immediately — no network call, no setup.
-
-```ts
-const client = createMockVexilloClient({
-  flags: { "new-checkout": true },
-  fallbacks: { "dark-mode": false },
-});
+// Restore all flags
+client.clearOverrides();
 ```
 
 ---
 
 ## Testing
 
-Use `createMockVexilloClient` to avoid any network calls and set exact flag values per test:
+Use `createMockVexilloClient` to create a pre-seeded client. `isReady` is `true` immediately — no network calls, no async setup.
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -188,13 +214,18 @@ function renderWithFlags(flags: Record<string, boolean>) {
   );
 }
 
-it("shows new checkout when flag is on", () => {
+it("shows the new checkout when the flag is on", () => {
   renderWithFlags({ "new-checkout": true });
   expect(screen.getByTestId("new-checkout")).toBeInTheDocument();
 });
+
+it("shows the old checkout when the flag is off", () => {
+  renderWithFlags({ "new-checkout": false });
+  expect(screen.getByTestId("old-checkout")).toBeInTheDocument();
+});
 ```
 
-For per-test overrides on a shared client, use `client.override()` and `client.clearOverrides()` in `afterEach`:
+For per-test overrides on a shared client, use `override` and `clearOverrides`:
 
 ```ts
 beforeEach(() => {
@@ -208,15 +239,87 @@ afterEach(() => {
 
 ---
 
+## API reference
+
+### `createVexilloClient(config)`
+
+| Option | Type | Required | Description |
+|---|---|---|---|
+| `baseUrl` | `string` | Yes | Base URL of your Vexillo deployment |
+| `apiKey` | `string` | Yes | API key for authentication |
+| `initialFlags` | `Record<string, boolean>` | No | Pre-seed flags and skip the initial fetch |
+| `fallbacks` | `Record<string, boolean>` | No | Default values for unknown keys |
+| `onError` | `(err: Error) => void` | No | Called when `load()` fails |
+
+### `<VexilloClientProvider>`
+
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `client` | `VexilloClient` | Yes | Client instance to provide to the tree |
+| `children` | `ReactNode` | Yes | |
+
+### `useFlag(key)`
+
+Returns `[value: boolean, isLoading: boolean]`. Must be called inside a `<VexilloClientProvider>`.
+
+### `useVexilloClient()`
+
+Returns the `VexilloClient` instance from context. Use this for imperative access inside components — e.g. calling `override()`, `getAllFlags()`, or reading `isReady` directly.
+
+```tsx
+import { useVexilloClient } from "@vexillo/react-sdk";
+
+export function DevTools() {
+  const client = useVexilloClient();
+  return <pre>{JSON.stringify(client.getAllFlags(), null, 2)}</pre>;
+}
+```
+
+Must be called inside a `<VexilloClientProvider>`.
+
+### `fetchFlags(baseUrl, apiKey)`
+
+Low-level fetch helper. Returns a flat `Record<string, boolean>`, or an empty object on error — never throws. Use this in server components and request handlers to pre-load flags before rendering.
+
+### `VexilloClient` instance
+
+| Member | Type | Description |
+|---|---|---|
+| `isReady` | `boolean` | `true` once `load()` has resolved or `initialFlags` was provided |
+| `lastError` | `Error \| null` | The error from the most recent failed `load()`, or `null` |
+| `load()` | `() => Promise<void>` | Fetches flags from the API. Called automatically by `<VexilloClientProvider>` on mount |
+| `getFlag(key)` | `(key: string) => boolean` | Synchronous flag read |
+| `getAllFlags()` | `() => Record<string, boolean>` | Snapshot of all resolved flags |
+| `override(flags)` | `(flags: Record<string, boolean>) => void` | Force flag values and notify subscribers |
+| `clearOverride(key)` | `(key: string) => void` | Remove override for a specific key |
+| `clearOverrides()` | `() => void` | Remove all overrides |
+| `subscribe(key, fn)` | `(key: string, fn: (value: boolean) => void) => () => void` | Subscribe to a specific flag key. Returns unsubscribe |
+| `subscribeAll(fn)` | `(fn: (flags: Record<string, boolean>) => void) => () => void` | Subscribe to any flag change. Returns unsubscribe |
+
+### `createMockVexilloClient(options?)`
+
+| Option | Type | Description |
+|---|---|---|
+| `flags` | `Record<string, boolean>` | Flag values returned by `useFlag` |
+| `fallbacks` | `Record<string, boolean>` | Fallback values for keys absent from `flags` |
+
+---
+
 ## Error handling
 
-`load()` failures (network errors, non-2xx responses) are caught silently. `useFlag` falls back to `fallbacks[key] ?? false`. Flags will never crash your app. Errors are surfaced via `client.lastError` and the optional `onError` config callback.
+`load()` failures (network errors, non-2xx responses) are caught silently — flags will never crash your app. When a load fails:
 
-## Bundler compatibility
+- `useFlag` falls back to `fallbacks[key] ?? false`
+- `client.lastError` is set to the error
+- The `onError` callback is called if provided
 
-| File | Format | Used by |
-|---|---|---|
-| `dist/index.js` | CJS | webpack 4, AEM, and legacy bundlers (via `main`) |
-| `dist/index.mjs` | ESM | Vite, webpack 5, Rollup (via `module` / `exports.import`) |
-
-No configuration needed — your bundler picks the right file automatically.
+```ts
+const client = createVexilloClient({
+  baseUrl: "https://your-vexillo.example.com",
+  apiKey: "your-api-key",
+  onError: (err) => {
+    console.error("Failed to load flags:", err);
+    Sentry.captureException(err);
+  },
+});
+```
