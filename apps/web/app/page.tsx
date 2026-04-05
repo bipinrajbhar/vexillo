@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import CreateFlagForm from './components/create-flag-form';
+import { authClient } from '@/lib/auth-client';
 
 interface Environment {
   id: string;
@@ -30,6 +31,9 @@ interface Flag {
 }
 
 export default function FlagsPage() {
+  const { data: sessionData } = authClient.useSession();
+  const isAdmin = (sessionData?.user as { role?: string } | undefined)?.role === 'admin';
+
   const [flags, setFlags] = useState<Flag[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,9 +90,11 @@ export default function FlagsPage() {
             {flags.length} flag{flags.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <Button onClick={() => setShowForm((v) => !v)} variant={showForm ? 'outline' : 'default'}>
-          {showForm ? 'Cancel' : 'New Flag'}
-        </Button>
+        {isAdmin && (
+          <Button onClick={() => setShowForm((v) => !v)} variant={showForm ? 'outline' : 'default'}>
+            {showForm ? 'Cancel' : 'New Flag'}
+          </Button>
+        )}
       </div>
 
       {showForm && (
@@ -144,15 +150,17 @@ export default function FlagsPage() {
                     </TableCell>
                   ))}
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(flag.key)}
-                      disabled={deletingKey === flag.key}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      {deletingKey === flag.key ? 'Deleting…' : 'Delete'}
-                    </Button>
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete(flag.key)}
+                        disabled={deletingKey === flag.key}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        {deletingKey === flag.key ? 'Deleting…' : 'Delete'}
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

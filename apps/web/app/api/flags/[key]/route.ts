@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { flags, environments, flagStates } from '@/lib/schema';
 import { eq, and, asc, sql } from 'drizzle-orm';
+import { auth } from '@/lib/auth';
 
 export async function GET(
   _req: NextRequest,
@@ -62,6 +64,10 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ key: string }> },
 ) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.user.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const { key } = await params;
   const body = await req.json();
   const name: string | undefined = body.name?.trim();
@@ -93,9 +99,13 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ key: string }> },
 ) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.user.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const { key } = await params;
 
   const result = await db.delete(flags).where(eq(flags.key, key)).returning({ id: flags.id });

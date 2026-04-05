@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { authClient } from '@/lib/auth-client';
 
 interface Environment {
   id: string;
@@ -31,6 +32,8 @@ export default function FlagDetailPage({
 }) {
   const { key } = use(params);
   const router = useRouter();
+  const { data: sessionData } = authClient.useSession();
+  const isAdmin = (sessionData?.user as { role?: string } | undefined)?.role === 'admin';
 
   const [flag, setFlag] = useState<Flag | null>(null);
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -203,7 +206,7 @@ export default function FlagDetailPage({
               )}
               <p className="text-xs text-muted-foreground mt-3">Created {createdAt}</p>
             </div>
-            <Button variant="outline" size="sm" onClick={startEditing}>Edit</Button>
+            {isAdmin && <Button variant="outline" size="sm" onClick={startEditing}>Edit</Button>}
           </div>
         )}
       </div>
@@ -219,8 +222,8 @@ export default function FlagDetailPage({
               </div>
               <Switch
                 checked={enabled}
-                disabled={toggling === env.id}
-                onCheckedChange={() => handleToggle(env)}
+                disabled={!isAdmin || toggling === env.id}
+                onCheckedChange={() => isAdmin && handleToggle(env)}
                 aria-label={`Toggle ${flag.name} in ${env.name}`}
               />
             </div>

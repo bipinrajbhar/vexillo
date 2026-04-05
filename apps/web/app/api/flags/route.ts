@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { flags, environments, flagStates, apiKeys } from '@/lib/schema';
 import { eq, and, desc, asc, sql } from 'drizzle-orm';
 import { hashKey } from '@/lib/api-key';
+import { auth } from '@/lib/auth';
 
 function slugify(name: string): string {
   return name
@@ -12,14 +14,34 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-const CORS_HEADERS = {
+const PREFLIGHT_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type',
 };
 
 export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+  return new NextResponse(null, { status: 204, headers: PREFLIGHT_HEADERS });
+}
+
+function buildCorsHeaders(allowedOrigins: string[], origin: string | null): Headers | null {
+  if (!origin) return new Headers();
+  if (allowedOrigins.includes('*')) {
+    return new Headers({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    });
+  }
+  if (allowedOrigins.includes(origin)) {
+    return new Headers({
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Vary': 'Origin',
+    });
+  }
+  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -28,7 +50,7 @@ export async function GET(req: NextRequest) {
   // SDK path: Authorization: Bearer sdk-xxx
   if (authHeader) {
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: CORS_HEADERS });
+    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: PREFLIGHT_HEADERS });
 
     const hash = await hashKey(token);
     const [apiKey] = await db
@@ -37,7 +59,19 @@ export async function GET(req: NextRequest) {
       .where(eq(apiKeys.keyHash, hash))
       .limit(1);
 
-    if (!apiKey) return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: CORS_HEADERS });
+    if (!apiKey) return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: PREFLIGHT_HEADERS });
+
+    const [env] = await db
+      .select({ allowedOrigins: environments.allowedOrigins })
+      .from(environments)
+      .where(eq(environments.id, apiKey.environmentId))
+      .limit(1);
+
+    const origin = req.headers.get('origin');
+    const corsHeaders = buildCorsHeaders(env?.allowedOrigins ?? [], origin);
+    if (!corsHeaders) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
 
     const rows = await db
       .select({
@@ -56,11 +90,14 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       { flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })) },
-      { headers: CORS_HEADERS },
+      { headers: corsHeaders },
     );
   }
 
-  // Dashboard path: no auth header — return all flags with per-environment states
+  // Dashboard path: requires session
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const [rows, envRows] = await Promise.all([
     db
       .select({
@@ -109,6 +146,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.user.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const body = await req.json();
   const name: string = body.name?.trim() ?? '';
   const description: string = body.description?.trim() ?? '';
