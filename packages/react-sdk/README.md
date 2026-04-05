@@ -4,7 +4,7 @@ React bindings for [Vexillo](https://vexillo-web.vercel.app) — a self-hosted f
 
 ## Requirements
 
-- React 19+
+- React 18 or 19
 - A running Vexillo deployment
 
 ## Installation
@@ -163,6 +163,18 @@ Returns the current value of a feature flag. Falls back to `fallbacks[key] ?? fa
 ### `fetchFlags(baseUrl: string, apiKey: string): Promise<Record<string, boolean>>`
 
 Fetches flags from the Vexillo API. Use this on the server to get `initialFlags`. Returns an empty object on error — never throws.
+
+## Bundler compatibility
+
+The package ships three outputs:
+
+| File | Format | Used by |
+|---|---|---|
+| `dist/index.js` | CJS | webpack 4, AEM, and legacy bundlers (via `main`) |
+| `dist/index.cjs` | CJS | Node.js and modern bundlers (via `exports.require`) |
+| `dist/index.mjs` | ESM | Vite, webpack 5, Rollup (via `exports.import`) |
+
+No configuration is needed — your bundler picks the right file automatically.
 
 ## Error handling
 
