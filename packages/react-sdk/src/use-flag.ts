@@ -1,20 +1,30 @@
-import { useVexilloContext } from "./provider";
+import { useState, useEffect } from "react";
+import { useVexilloClientContext } from "./provider";
 
 /**
  * Returns the current boolean value for a feature flag key.
  *
- * - Before the provider's fetch resolves (including SSR), returns the value
- *   from `fallbacks`, or `false` if the key is absent.
- * - After the fetch resolves, returns the live value from the API, falling
- *   back to `fallbacks[key] ?? false` for keys not present in the response.
- * - Throws if called outside a `<VexilloProvider>`.
+ * Falls back to `defaultValue` (then `false`) for unknown keys or while the
+ * client is loading. Re-renders only when this specific key's value changes.
+ *
+ * If you need to know whether flags have loaded yet, use `useVexilloClient()`
+ * and check `client.isReady`.
+ *
+ * @throws if called outside a `<VexilloClientProvider>`.
  */
-export function useFlag(key: string): boolean {
-  const { flags, fallbacks } = useVexilloContext();
+export function useFlag(key: string, defaultValue?: boolean): boolean {
+  const client = useVexilloClientContext();
 
-  if (key in flags) {
-    return flags[key];
-  }
+  const [value, setValue] = useState(() => client.getFlag(key, defaultValue));
 
-  return fallbacks[key] ?? false;
+  useEffect(() => {
+    // Sync if the client updated between render and this effect running.
+    setValue(client.getFlag(key, defaultValue));
+
+    return client.subscribe(key, () => {
+      setValue(client.getFlag(key, defaultValue));
+    });
+  }, [client, key, defaultValue]);
+
+  return value;
 }

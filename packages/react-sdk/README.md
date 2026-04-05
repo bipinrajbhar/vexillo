@@ -17,27 +17,38 @@ npm install @vexillo/react-sdk
 
 ### SPA (no SSR)
 
-Wrap your app with `<VexilloProvider>` inside a `<Suspense>` boundary. The provider fetches flags on mount and suspends the subtree until they resolve.
+Create a client once and pass it to `<VexilloClientProvider>`. Flags are fetched on mount; components read them with `useFlag`.
 
 ```tsx
-import { Suspense } from "react";
-import { VexilloProvider, useFlag } from "@vexillo/react-sdk";
+// vexillo.ts — create once, import anywhere
+import { createVexilloClient } from "@vexillo/react-sdk";
 
-function App() {
+export const client = createVexilloClient({
+  baseUrl: "https://your-vexillo.example.com",
+  apiKey: "your-api-key",
+  fallbacks: { "new-checkout": false },
+});
+```
+
+```tsx
+// App.tsx
+import { VexilloClientProvider } from "@vexillo/react-sdk";
+import { client } from "./vexillo";
+
+export default function App() {
   return (
-    <Suspense fallback={<Spinner />}>
-      <VexilloProvider
-        baseUrl="https://your-vexillo.example.com"
-        apiKey="your-api-key"
-        fallbacks={{ "new-checkout": false }}
-      >
-        <MyApp />
-      </VexilloProvider>
-    </Suspense>
+    <VexilloClientProvider client={client}>
+      <MyApp />
+    </VexilloClientProvider>
   );
 }
+```
 
-function MyApp() {
+```tsx
+// CheckoutButton.tsx
+import { useFlag } from "@vexillo/react-sdk";
+
+export function CheckoutButton() {
   const newCheckout = useFlag("new-checkout");
   return newCheckout ? <NewCheckout /> : <OldCheckout />;
 }
@@ -47,28 +58,31 @@ function MyApp() {
 
 ### Next.js App Router (RSC)
 
-Fetch flags in your server component and pass them as `initialFlags`. The provider renders synchronously on the server with no Suspense needed.
+Fetch flags in your server component with `createServerVexilloClient`, then pass them as `initialFlags` to a client-side provider. Components render with correct flag values on the first paint — no loading state, no hydration mismatch.
 
 ```tsx
-// app/layout.tsx
-import { fetchFlags, VexilloProvider } from "@vexillo/react-sdk";
+// app/layout.tsx  (Server Component)
+import { createServerVexilloClient, createVexilloClient, VexilloClientProvider } from "@vexillo/react-sdk";
 
 export default async function RootLayout({ children }) {
-  const flags = await fetchFlags(
-    process.env.VEXILLO_BASE_URL,
-    process.env.VEXILLO_API_KEY,
-  );
+  const serverClient = await createServerVexilloClient({
+    baseUrl: process.env.VEXILLO_BASE_URL!,
+    apiKey: process.env.VEXILLO_API_KEY!,
+  });
+
+  // Pass flags to the browser client so isReady = true on first render.
+  const client = createVexilloClient({
+    baseUrl: process.env.NEXT_PUBLIC_VEXILLO_BASE_URL!,
+    apiKey: process.env.NEXT_PUBLIC_VEXILLO_API_KEY!,
+    initialFlags: serverClient.getAllFlags(),
+  });
 
   return (
     <html>
       <body>
-        <VexilloProvider
-          baseUrl={process.env.VEXILLO_BASE_URL}
-          apiKey={process.env.VEXILLO_API_KEY}
-          initialFlags={flags}
-        >
+        <VexilloClientProvider client={client} autoLoad={false}>
           {children}
-        </VexilloProvider>
+        </VexilloClientProvider>
       </body>
     </html>
   );
@@ -89,98 +103,195 @@ export function CheckoutButton() {
 
 ---
 
-### Node.js SSR with `renderToPipeableStream`
+### Node.js SSR (`renderToString` / `renderToPipeableStream`)
 
-Suspense is supported — `initialFlags` is optional. The provider suspends inline and the resolved flags are streamed to the client.
-
-```tsx
-import { renderToPipeableStream } from "react-dom/server";
-import { VexilloProvider } from "@vexillo/react-sdk";
-
-const { pipe } = renderToPipeableStream(
-  <Suspense fallback={<Spinner />}>
-    <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY}>
-      <App />
-    </VexilloProvider>
-  </Suspense>,
-);
-
-pipe(res);
-```
-
-Or pass `initialFlags` to skip the suspension entirely:
-
-```tsx
-import { fetchFlags, VexilloProvider } from "@vexillo/react-sdk";
-
-const flags = await fetchFlags(BASE_URL, API_KEY);
-
-const { pipe } = renderToPipeableStream(
-  <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY} initialFlags={flags}>
-    <App />
-  </VexilloProvider>,
-);
-```
-
----
-
-### Node.js SSR with `renderToString`
-
-> **`renderToString` does not support Suspense.** You must call `fetchFlags` before rendering and pass the result as `initialFlags`, otherwise the provider will throw.
+Call `createServerVexilloClient` before rendering to pre-load flags. Pass `getAllFlags()` as `initialFlags` so the render is fully synchronous.
 
 ```tsx
 import { renderToString } from "react-dom/server";
-import { fetchFlags, VexilloProvider } from "@vexillo/react-sdk";
+import {
+  createServerVexilloClient,
+  createVexilloClient,
+  VexilloClientProvider,
+} from "@vexillo/react-sdk";
 
 // In your request handler:
-const flags = await fetchFlags(BASE_URL, API_KEY);
+const serverClient = await createServerVexilloClient({
+  baseUrl: BASE_URL,
+  apiKey: API_KEY,
+});
+
+const client = createVexilloClient({
+  baseUrl: BASE_URL,
+  apiKey: API_KEY,
+  initialFlags: serverClient.getAllFlags(),
+});
 
 const html = renderToString(
-  <VexilloProvider baseUrl={BASE_URL} apiKey={API_KEY} initialFlags={flags}>
+  <VexilloClientProvider client={client} autoLoad={false}>
     <App />
-  </VexilloProvider>,
+  </VexilloClientProvider>,
 );
 ```
+
+> **Note:** If you skip `initialFlags`, flags are not in the server-rendered HTML. Components will show their `defaultValue` on the server and load real values after hydration on the client.
 
 ---
 
 ## API
 
-### `<VexilloProvider>`
+### `createVexilloClient(config)`
 
-| Prop | Type | Required | Description |
+Creates a feature flag client. Use the returned instance as the single source of truth for your app.
+
+```ts
+const client = createVexilloClient({
+  baseUrl: "https://your-vexillo.example.com", // required
+  apiKey: "your-api-key",                       // required
+  initialFlags: { "new-checkout": false },      // optional — skip initial fetch
+  fallbacks: { "new-checkout": false },         // optional — defaults for unknown keys
+  onError: (err) => console.error(err),         // optional — called on load() failure
+});
+```
+
+#### `client.load(): Promise<void>`
+
+Fetches flags from the API and notifies all subscribers. Called automatically by `<VexilloClientProvider autoLoad>`.
+
+#### `client.getFlag(key, defaultValue?): boolean`
+
+Synchronous read. Resolution order: overrides → remote → fallbacks → `defaultValue` → `false`.
+
+#### `client.getAllFlags(): Record<string, boolean>`
+
+Snapshot of all resolved flags (overrides + remote + fallbacks merged).
+
+#### `client.override(flags): () => void`
+
+Imperatively set flag values. Returns a cleanup function that restores previous values. Useful for feature previews and tests.
+
+```ts
+const restore = client.override({ "new-checkout": true });
+// ... later:
+restore();
+```
+
+#### `client.subscribe(key, listener): () => void`
+
+Subscribe to changes on a specific flag key. Returns an unsubscribe function.
+
+#### `client.subscribeAll(listener): () => void`
+
+Subscribe to any flag change. Returns an unsubscribe function.
+
+#### `client.isReady: boolean`
+
+`true` once `load()` has resolved (or `initialFlags` was provided at creation).
+
+#### `client.lastError: Error | null`
+
+The error from the most recent failed `load()`, or `null`.
+
+---
+
+### `<VexilloClientProvider>`
+
+| Prop | Type | Default | Description |
 |---|---|---|---|
-| `baseUrl` | `string` | Yes | Base URL of your Vexillo deployment |
-| `apiKey` | `string` | Yes | SDK API key for the target environment |
-| `initialFlags` | `Record<string, boolean>` | No* | Pre-resolved flags from the server. **Required when using `renderToString`** |
-| `fallbacks` | `Record<string, boolean>` | No | Default values for unknown flag keys (default: `{}`) |
-| `children` | `ReactNode` | Yes | |
+| `client` | `VexilloClient` | required | The client instance to provide |
+| `autoLoad` | `boolean` | `true` | Call `client.load()` on mount if not already ready |
+| `children` | `ReactNode` | required | |
 
-### `useFlag(key: string): boolean`
+---
 
-Returns the current value of a feature flag. Falls back to `fallbacks[key] ?? false` for unknown keys. Must be called inside a `<VexilloProvider>`.
+### `useFlag(key, defaultValue?): boolean`
 
-### `fetchFlags(baseUrl: string, apiKey: string): Promise<Record<string, boolean>>`
+Returns the current value of a feature flag. Falls back to `defaultValue` then `false` for unknown keys or while the client is loading. Re-renders only when this specific key's value changes. Must be called inside a `<VexilloClientProvider>`.
 
-Fetches flags from the Vexillo API. Use this on the server to get `initialFlags`. Returns an empty object on error — never throws.
+If you need to gate on whether flags have loaded yet, use `useVexilloClient()` and check `client.isReady`.
+
+---
+
+### `useVexilloClient(): VexilloClient`
+
+Returns the nearest client from context. Use this escape hatch for imperative access in components (e.g. calling `override()` or `getAllFlags()` directly).
+
+---
+
+### `createServerVexilloClient(config): Promise<VexilloClient>`
+
+Creates a client and calls `load()` before returning. Designed for server components and request handlers where you need flags before rendering.
+
+---
+
+### `fetchFlags(baseUrl, apiKey): Promise<Record<string, boolean>>`
+
+Low-level fetch helper. Returns a flat flag map, or an empty object on error — never throws. Useful when you need flags outside of a client instance.
+
+---
+
+### `createMockVexilloClient(options?)`
+
+Creates a pre-seeded client for tests. `isReady` is `true` immediately — no network call, no setup.
+
+```ts
+const client = createMockVexilloClient({
+  flags: { "new-checkout": true },
+  fallbacks: { "dark-mode": false },
+});
+```
+
+---
+
+## Testing
+
+Use `createMockVexilloClient` to avoid any network calls and set exact flag values per test:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { VexilloClientProvider, createMockVexilloClient } from "@vexillo/react-sdk";
+import { CheckoutButton } from "./CheckoutButton";
+
+function renderWithFlags(flags: Record<string, boolean>) {
+  const client = createMockVexilloClient({ flags });
+  return render(
+    <VexilloClientProvider client={client}>
+      <CheckoutButton />
+    </VexilloClientProvider>,
+  );
+}
+
+it("shows new checkout when flag is on", () => {
+  renderWithFlags({ "new-checkout": true });
+  expect(screen.getByTestId("new-checkout")).toBeInTheDocument();
+});
+```
+
+For per-test overrides on a shared client, use `client.override()` and call the returned cleanup in `afterEach`:
+
+```ts
+let restoreFlags: () => void;
+
+beforeEach(() => {
+  restoreFlags = client.override({ "new-checkout": true });
+});
+
+afterEach(() => {
+  restoreFlags();
+});
+```
+
+---
+
+## Error handling
+
+`load()` failures (network errors, non-2xx responses) are caught silently. `useFlag` falls back to `fallbacks[key] ?? defaultValue ?? false`. Flags will never crash your app. Errors are surfaced via `client.lastError` and the optional `onError` config callback.
 
 ## Bundler compatibility
-
-The package ships three outputs:
 
 | File | Format | Used by |
 |---|---|---|
 | `dist/index.js` | CJS | webpack 4, AEM, and legacy bundlers (via `main`) |
 | `dist/index.mjs` | ESM | Vite, webpack 5, Rollup (via `module` / `exports.import`) |
 
-No configuration is needed — your bundler picks the right file automatically.
-
-## Error handling
-
-Fetch failures (network errors, non-2xx responses) silently resolve with an empty flag map. All `useFlag` calls fall back to `fallbacks[key] ?? false`. Feature flags will never crash your app.
-
-## Caching
-
-On the **client**, flags are cached in memory by `baseUrl + apiKey`. The cache is invalidated when either prop changes, triggering a new fetch and re-suspension.
-
-On the **server**, every render fetches fresh — there is no server-side cache to prevent flag data from leaking across requests in Node.js.
+No configuration needed — your bundler picks the right file automatically.
