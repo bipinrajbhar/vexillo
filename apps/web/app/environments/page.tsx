@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useForm } from '@tanstack/react-form';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,12 +28,8 @@ export default function EnvironmentsPage() {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState('');
   const [rotating, setRotating] = useState<string | null>(null);
   const [revealedKey, setRevealedKey] = useState<RevealedKey | null>(null);
-  const [newOrigin, setNewOrigin] = useState<Record<string, string>>({});
   const [originBusy, setOriginBusy] = useState<string | null>(null);
 
   const fetchEnvironments = useCallback(async () => {
@@ -45,30 +42,6 @@ export default function EnvironmentsPage() {
   useEffect(() => {
     fetchEnvironments();
   }, [fetchEnvironments]);
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setCreateError('');
-    setCreating(true);
-    try {
-      const res = await fetch('/api/environments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setCreateError(data.error ?? 'Failed to create environment');
-        return;
-      }
-      setNewName('');
-      setShowForm(false);
-      setRevealedKey({ environmentId: data.environment.id, apiKey: data.apiKey });
-      await fetchEnvironments();
-    } finally {
-      setCreating(false);
-    }
-  }
 
   async function handleRotate(envId: string) {
     setRotating(envId);
@@ -88,7 +61,7 @@ export default function EnvironmentsPage() {
     setRevealedKey(null);
   }
 
-  async function patchOrigins(envId: string, origins: string[]) {
+  async function patchOrigins(envId: string, origins: string[]): Promise<boolean> {
     setOriginBusy(envId);
     try {
       const res = await fetch(`/api/environments/${envId}`, {
@@ -100,20 +73,20 @@ export default function EnvironmentsPage() {
         setEnvironments((prev) =>
           prev.map((e) => (e.id === envId ? { ...e, allowedOrigins: origins } : e)),
         );
+        return true;
       }
+      return false;
     } finally {
       setOriginBusy(null);
     }
   }
 
-  async function handleAddOrigin(e: React.FormEvent, envId: string) {
-    e.preventDefault();
-    const origin = newOrigin[envId]?.trim();
-    if (!origin) return;
+  async function addOrigin(envId: string, origin: string): Promise<boolean> {
+    const trimmed = origin.trim();
+    if (!trimmed) return false;
     const env = environments.find((e) => e.id === envId);
-    if (!env || env.allowedOrigins.includes(origin)) return;
-    await patchOrigins(envId, [...env.allowedOrigins, origin]);
-    setNewOrigin((prev) => ({ ...prev, [envId]: '' }));
+    if (!env || env.allowedOrigins.includes(trimmed)) return false;
+    return patchOrigins(envId, [...env.allowedOrigins, trimmed]);
   }
 
   async function handleRemoveOrigin(envId: string, origin: string) {
@@ -140,40 +113,22 @@ export default function EnvironmentsPage() {
           </p>
         </div>
         {isAdmin && (
-          <Button onClick={() => { setShowForm((v) => !v); setCreateError(''); }} variant={showForm ? 'outline' : 'default'}>
+          <Button onClick={() => setShowForm((v) => !v)} variant={showForm ? 'outline' : 'default'}>
             {showForm ? 'Cancel' : 'New Environment'}
           </Button>
         )}
       </div>
 
       {showForm && (
-        <form onSubmit={handleCreate} className="border rounded-lg p-6 space-y-4 bg-card mb-8">
-          <h2 className="font-semibold">Create Environment</h2>
-          {createError && (
-            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
-              {createError}
-            </p>
-          )}
-          <div className="space-y-1.5">
-            <Label htmlFor="env-name">Name</Label>
-            <Input
-              id="env-name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              required
-              autoFocus
-              placeholder="QA"
-            />
-          </div>
-          <div className="flex gap-3">
-            <Button type="submit" disabled={creating}>
-              {creating ? 'Creating…' : 'Create Environment'}
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => { setShowForm(false); setCreateError(''); }}>
-              Cancel
-            </Button>
-          </div>
-        </form>
+        <CreateEnvironmentForm
+          className="mb-8"
+          onCreated={async (data) => {
+            setShowForm(false);
+            setRevealedKey({ environmentId: data.environmentId, apiKey: data.apiKey });
+            await fetchEnvironments();
+          }}
+          onCancel={() => setShowForm(false)}
+        />
       )}
 
       {revealedKey && (
@@ -238,17 +193,11 @@ export default function EnvironmentsPage() {
                   </div>
                 )}
                 {isAdmin && (
-                  <form onSubmit={(e) => handleAddOrigin(e, env.id)} className="flex gap-2 mt-2">
-                    <Input
-                      placeholder="https://example.com or *"
-                      value={newOrigin[env.id] ?? ''}
-                      onChange={(e) => setNewOrigin((prev) => ({ ...prev, [env.id]: e.target.value }))}
-                      className="h-8 text-xs"
-                    />
-                    <Button type="submit" size="sm" disabled={originBusy === env.id || !newOrigin[env.id]?.trim()}>
-                      Add
-                    </Button>
-                  </form>
+                  <AddOriginForm
+                    envId={env.id}
+                    disabled={originBusy === env.id}
+                    onAdd={addOrigin}
+                  />
                 )}
               </div>
             </div>
@@ -256,6 +205,131 @@ export default function EnvironmentsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function CreateEnvironmentForm({
+  className,
+  onCreated,
+  onCancel,
+}: {
+  className?: string;
+  onCreated: (data: { environmentId: string; apiKey: string }) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const [createError, setCreateError] = useState('');
+
+  const form = useForm({
+    defaultValues: { name: '' },
+    onSubmit: async ({ value }) => {
+      setCreateError('');
+      const res = await fetch('/api/environments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: value.name.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateError(data.error ?? 'Failed to create environment');
+        return;
+      }
+      form.reset();
+      await onCreated({ environmentId: data.environment.id, apiKey: data.apiKey });
+    },
+  });
+
+  return (
+    <form
+      className={['border rounded-lg p-6 space-y-4 bg-card', className].filter(Boolean).join(' ')}
+      onSubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        form.handleSubmit();
+      }}
+    >
+      <h2 className="font-semibold">Create Environment</h2>
+      {createError && (
+        <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
+          {createError}
+        </p>
+      )}
+      <form.Field name="name">
+        {(field) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="env-name">Name</Label>
+            <Input
+              id="env-name"
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(e) => field.handleChange(e.target.value)}
+              required
+              autoFocus
+              placeholder="QA"
+            />
+          </div>
+        )}
+      </form.Field>
+      <div className="flex gap-3">
+        <form.Subscribe selector={(s) => s.isSubmitting}>
+          {(isSubmitting) => (
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creating…' : 'Create Environment'}
+            </Button>
+          )}
+        </form.Subscribe>
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function AddOriginForm({
+  envId,
+  disabled,
+  onAdd,
+}: {
+  envId: string;
+  disabled: boolean;
+  onAdd: (envId: string, origin: string) => Promise<boolean>;
+}) {
+  const form = useForm({
+    defaultValues: { origin: '' },
+    onSubmit: async ({ value }) => {
+      const added = await onAdd(envId, value.origin);
+      if (added) form.reset();
+    },
+  });
+
+  return (
+    <form
+      className="flex gap-2 mt-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        form.handleSubmit();
+      }}
+    >
+      <form.Field name="origin">
+        {(field) => (
+          <Input
+            placeholder="https://example.com or *"
+            value={field.state.value}
+            onBlur={field.handleBlur}
+            onChange={(e) => field.handleChange(e.target.value)}
+            className="h-8 text-xs"
+          />
+        )}
+      </form.Field>
+      <form.Subscribe selector={(s) => s.values.origin.trim()}>
+        {(trimmed) => (
+          <Button type="submit" size="sm" disabled={disabled || !trimmed}>
+            Add
+          </Button>
+        )}
+      </form.Subscribe>
+    </form>
   );
 }
 

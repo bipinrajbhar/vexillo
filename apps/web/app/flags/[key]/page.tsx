@@ -3,6 +3,7 @@
 import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useForm } from '@tanstack/react-form';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,10 +42,6 @@ export default function FlagDetailPage({
   const [notFound, setNotFound] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [editError, setEditError] = useState('');
 
   const fetchFlag = useCallback(async () => {
     const res = await fetch(`/api/flags/${key}`);
@@ -62,37 +59,6 @@ export default function FlagDetailPage({
   useEffect(() => {
     fetchFlag();
   }, [fetchFlag]);
-
-  function startEditing() {
-    if (!flag) return;
-    setEditName(flag.name);
-    setEditDescription(flag.description);
-    setEditError('');
-    setEditing(true);
-  }
-
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
-    if (!flag) return;
-    setSaving(true);
-    setEditError('');
-    try {
-      const res = await fetch(`/api/flags/${key}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editName, description: editDescription }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setEditError(data.error ?? 'Failed to save');
-        return;
-      }
-      setFlag((prev) => prev ? { ...prev, name: data.flag.name, description: data.flag.description } : prev);
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function handleToggle(env: Environment) {
     if (!flag) return;
@@ -166,36 +132,16 @@ export default function FlagDetailPage({
 
       <div className="mb-8">
         {editing ? (
-          <form onSubmit={handleSave} className="space-y-4 border rounded-lg p-6 bg-card">
-            {editError && (
-              <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
-                {editError}
-              </p>
-            )}
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-name">Name</Label>
-              <Input
-                id="edit-name"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                required
-                autoFocus
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-description">Description</Label>
-              <Textarea
-                id="edit-description"
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className="flex gap-3">
-              <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
-              <Button type="button" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
-            </div>
-          </form>
+          <FlagEditForm
+            flagKey={key}
+            initialName={flag.name}
+            initialDescription={flag.description}
+            onCancel={() => setEditing(false)}
+            onSaved={(patch) => {
+              setFlag((prev) => (prev ? { ...prev, ...patch } : prev));
+              setEditing(false);
+            }}
+          />
         ) : (
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -206,7 +152,11 @@ export default function FlagDetailPage({
               )}
               <p className="text-xs text-muted-foreground mt-3">Created {createdAt}</p>
             </div>
-            {isAdmin && <Button variant="outline" size="sm" onClick={startEditing}>Edit</Button>}
+            {isAdmin && (
+              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -231,5 +181,100 @@ export default function FlagDetailPage({
         })}
       </div>
     </div>
+  );
+}
+
+function FlagEditForm({
+  flagKey,
+  initialName,
+  initialDescription,
+  onCancel,
+  onSaved,
+}: {
+  flagKey: string;
+  initialName: string;
+  initialDescription: string;
+  onCancel: () => void;
+  onSaved: (patch: { name: string; description: string }) => void;
+}) {
+  const [editError, setEditError] = useState('');
+
+  const form = useForm({
+    defaultValues: {
+      name: initialName,
+      description: initialDescription,
+    },
+    onSubmit: async ({ value }) => {
+      setEditError('');
+      const res = await fetch(`/api/flags/${flagKey}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: value.name, description: value.description }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setEditError(data.error ?? 'Failed to save');
+        return;
+      }
+      onSaved({ name: data.flag.name, description: data.flag.description });
+    },
+  });
+
+  return (
+    <form
+      className="space-y-4 border rounded-lg p-6 bg-card"
+      onSubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        form.handleSubmit();
+      }}
+    >
+      {editError && (
+        <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
+          {editError}
+        </p>
+      )}
+      <form.Field name="name">
+        {(field) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-name">Name</Label>
+            <Input
+              id="edit-name"
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(e) => field.handleChange(e.target.value)}
+              required
+              autoFocus
+            />
+          </div>
+        )}
+      </form.Field>
+      <form.Field name="description">
+        {(field) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-description">Description</Label>
+            <Textarea
+              id="edit-description"
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(e) => field.handleChange(e.target.value)}
+              rows={3}
+            />
+          </div>
+        )}
+      </form.Field>
+      <div className="flex gap-3">
+        <form.Subscribe selector={(s) => s.isSubmitting}>
+          {(isSubmitting) => (
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Saving…' : 'Save'}
+            </Button>
+          )}
+        </form.Subscribe>
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useForm } from '@tanstack/react-form';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,86 +21,115 @@ interface Props {
 }
 
 export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
-  const [name, setName] = useState('');
-  const [key, setKey] = useState('');
   const [keyEdited, setKeyEdited] = useState(false);
-  const [description, setDescription] = useState('');
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
-  function handleNameChange(value: string) {
-    setName(value);
-    if (!keyEdited) setKey(slugify(value));
-  }
-
-  function handleKeyChange(value: string) {
-    setKey(value);
-    setKeyEdited(value !== slugify(name));
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError('');
-    setSubmitting(true);
-    try {
-      await onSubmit({ name: name.trim(), key: key.trim(), description: description.trim() });
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const form = useForm({
+    defaultValues: {
+      name: '',
+      key: '',
+      description: '',
+    },
+    onSubmit: async ({ value }) => {
+      setSubmitError('');
+      try {
+        await onSubmit({
+          name: value.name.trim(),
+          key: value.key.trim(),
+          description: value.description.trim(),
+        });
+      } catch (err: unknown) {
+        setSubmitError(err instanceof Error ? err.message : 'Something went wrong');
+      }
+    },
+  });
 
   return (
-    <form onSubmit={handleSubmit} className="border rounded-lg p-6 space-y-4 bg-card">
+    <form
+      className="border rounded-lg p-6 space-y-4 bg-card"
+      onSubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        form.handleSubmit();
+      }}
+    >
       <h2 className="font-semibold">Create Flag</h2>
 
-      {error && (
+      {submitError && (
         <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
-          {error}
+          {submitError}
         </p>
       )}
 
-      <div className="space-y-1.5">
-        <Label htmlFor="flag-name">Name</Label>
-        <Input
-          id="flag-name"
-          value={name}
-          onChange={(e) => handleNameChange(e.target.value)}
-          required
-          autoFocus
-          placeholder="My New Feature"
-        />
-      </div>
+      <form.Field name="name">
+        {(field) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-name">Name</Label>
+            <Input
+              id="flag-name"
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(e) => {
+                const v = e.target.value;
+                field.handleChange(v);
+                if (!keyEdited) {
+                  form.setFieldValue('key', slugify(v));
+                }
+              }}
+              required
+              autoFocus
+              placeholder="My New Feature"
+            />
+          </div>
+        )}
+      </form.Field>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="flag-key">Key</Label>
-        <Input
-          id="flag-key"
-          value={key}
-          onChange={(e) => handleKeyChange(e.target.value)}
-          required
-          placeholder="my-new-feature"
-          className="font-mono"
-        />
-        <p className="text-xs text-muted-foreground">Auto-generated from name. Immutable after creation.</p>
-      </div>
+      <form.Field name="key">
+        {(field) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-key">Key</Label>
+            <Input
+              id="flag-key"
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(e) => {
+                const v = e.target.value;
+                field.handleChange(v);
+                setKeyEdited(v !== slugify(form.getFieldValue('name')));
+              }}
+              required
+              placeholder="my-new-feature"
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">Auto-generated from name. Immutable after creation.</p>
+          </div>
+        )}
+      </form.Field>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="flag-description">Description</Label>
-        <Textarea
-          id="flag-description"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={2}
-          placeholder="What does this flag control?"
-        />
-      </div>
+      <form.Field name="description">
+        {(field) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-description">Description</Label>
+            <Textarea
+              id="flag-description"
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(e) => field.handleChange(e.target.value)}
+              rows={2}
+              placeholder="What does this flag control?"
+            />
+          </div>
+        )}
+      </form.Field>
 
       <div className="flex gap-3">
-        <Button type="submit" disabled={submitting}>
-          {submitting ? 'Creating…' : 'Create Flag'}
-        </Button>
+        <form.Subscribe selector={(s) => s.isSubmitting}>
+          {(isSubmitting) => (
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creating…' : 'Create Flag'}
+            </Button>
+          )}
+        </form.Subscribe>
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
