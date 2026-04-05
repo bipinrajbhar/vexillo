@@ -171,8 +171,7 @@ The package ships three outputs:
 | File | Format | Used by |
 |---|---|---|
 | `dist/index.js` | CJS | webpack 4, AEM, and legacy bundlers (via `main`) |
-| `dist/index.cjs` | CJS | Node.js and modern bundlers (via `exports.require`) |
-| `dist/index.mjs` | ESM | Vite, webpack 5, Rollup (via `exports.import`) |
+| `dist/index.mjs` | ESM | Vite, webpack 5, Rollup (via `module` / `exports.import`) |
 
 No configuration is needed — your bundler picks the right file automatically.
 
