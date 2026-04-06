@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,7 +15,6 @@ import { Textarea } from "@/components/ui/textarea";
 export default function FlagDetailClient({
   flagKey,
   initialFlag,
-  initialRollout,
   isAdmin,
 }: {
   flagKey: string;
@@ -26,7 +24,6 @@ export default function FlagDetailClient({
     key: string;
     description: string;
   };
-  initialRollout: { name: string; slug: string; enabled: boolean }[];
   isAdmin: boolean;
 }) {
   const router = useRouter();
@@ -151,46 +148,6 @@ export default function FlagDetailClient({
           </div>
         </>
       )}
-
-      <section className="page-enter page-enter-delay-2 mt-2">
-        <h2 className="font-heading text-base font-medium text-foreground">Rollout</h2>
-        {initialRollout.length === 0 ? (
-          <p className="mt-3 text-sm text-muted-foreground">
-            No environments yet.
-            {isAdmin ? (
-              <>
-                {" "}
-                <Link
-                  href="/environments"
-                  className="font-medium text-foreground underline-offset-4 hover:underline"
-                >
-                  Add one
-                </Link>
-              </>
-            ) : null}
-          </p>
-        ) : (
-          <div className="surface-card mt-4 divide-y divide-border overflow-hidden">
-            {initialRollout.map((env) => (
-              <div
-                key={env.slug}
-                className="flex items-center justify-between gap-4 px-5 py-4"
-              >
-                <div className="min-w-0">
-                  <p className="font-medium">{env.name}</p>
-                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">{env.slug}</p>
-                </div>
-                <Badge
-                  variant={env.enabled ? "default" : "secondary"}
-                  className="shrink-0 rounded-lg px-2.5 font-mono text-[0.65rem] tracking-wide"
-                >
-                  {env.enabled ? "ON" : "OFF"}
-                </Badge>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

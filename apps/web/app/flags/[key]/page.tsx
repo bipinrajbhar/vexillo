@@ -30,7 +30,6 @@ export default async function FlagDetailPage({
     <FlagDetailClient
       flagKey={key}
       initialFlag={initialFlag}
-      initialRollout={data.rollout}
       isAdmin={session.user.role === 'admin'}
     />
   );

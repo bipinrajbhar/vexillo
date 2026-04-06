@@ -86,11 +86,11 @@
   --chart-5: #d4d4d4;
   --radius: 0.375rem;
   /* Elevated panels: cards, table shells, sign-in — one system */
-  --surface-shadow: 0 1px 2px -0.5px rgb(0 0 0 / 0.07),
-    0 3px 10px -4px rgb(0 0 0 / 0.1);
+  --surface-shadow:
+    0 1px 2px -0.5px rgb(0 0 0 / 0.07), 0 3px 10px -4px rgb(0 0 0 / 0.1);
   /* Compact floats: tooltips, switch thumb — same family, tighter blur */
-  --surface-shadow-xs: 0 1px 2px -0.5px rgb(0 0 0 / 0.09),
-    0 2px 6px -3px rgb(0 0 0 / 0.08);
+  --surface-shadow-xs:
+    0 1px 2px -0.5px rgb(0 0 0 / 0.09), 0 2px 6px -3px rgb(0 0 0 / 0.08);
   --surface-shadow-sticky: 4px 0 14px -6px rgb(0 0 0 / 0.12);
 }
 
@@ -129,10 +129,10 @@
   --chart-3: #737373;
   --chart-4: #e5e5e5;
   --chart-5: #525252;
-  --surface-shadow: 0 1px 2px -0.5px rgb(0 0 0 / 0.5),
-    0 4px 16px -6px rgb(0 0 0 / 0.45);
-  --surface-shadow-xs: 0 1px 2px -0.5px rgb(0 0 0 / 0.55),
-    0 2px 8px -4px rgb(0 0 0 / 0.45);
+  --surface-shadow:
+    0 1px 2px -0.5px rgb(0 0 0 / 0.5), 0 4px 16px -6px rgb(0 0 0 / 0.45);
+  --surface-shadow-xs:
+    0 1px 2px -0.5px rgb(0 0 0 / 0.55), 0 2px 8px -4px rgb(0 0 0 / 0.45);
   --surface-shadow-sticky: 4px 0 14px -6px rgb(0 0 0 / 0.55);
 }
 

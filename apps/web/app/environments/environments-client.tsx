@@ -16,7 +16,6 @@ import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -525,22 +524,21 @@ export default function EnvironmentsClient({
           </AlertDescription>
         </Alert>
       ) : (
-        <Card className="page-enter page-enter-delay-1 gap-0 overflow-hidden py-0">
-          <CardContent className="p-0">
-          <Table>
+        <div className="table-shell page-enter page-enter-delay-1">
+          <Table className="data-table">
             <TableHeader>
-              <TableRow>
-                <TableHead className="min-w-48 ps-5 font-medium text-foreground">
+              <TableRow className="data-table-head-row">
+                <TableHead className="data-table-th min-w-48 ps-5">
                   Environment
                 </TableHead>
-                <TableHead className="hidden min-w-36 font-medium text-foreground md:table-cell">
+                <TableHead className="data-table-th hidden min-w-36 md:table-cell">
                   Key hint
                 </TableHead>
-                <TableHead className="min-w-0 font-medium text-foreground">
+                <TableHead className="data-table-th min-w-0">
                   Allowed origins (CORS)
                 </TableHead>
                 {isAdmin ? (
-                  <TableHead className="w-[1%] whitespace-nowrap pe-5 text-end font-medium text-foreground">
+                  <TableHead className="data-table-th w-[1%] whitespace-nowrap pe-5 text-end">
                     Actions
                   </TableHead>
                 ) : null}
@@ -550,18 +548,11 @@ export default function EnvironmentsClient({
               {environments.map((env) => {
                 const originRows = originRowsFor(env.id, env.allowedOrigins);
                 return (
-                  <TableRow
-                    key={env.id}
-                    className="transition-colors hover:bg-muted/20 dark:hover:bg-muted/10"
-                  >
+                  <TableRow key={env.id} className="data-table-body-row">
                     <TableCell className="min-w-0 whitespace-normal ps-5 align-top">
                       <div className="min-w-0 py-1">
-                        <div className="text-[0.9375rem] font-medium tracking-[-0.01em] text-foreground">
-                          {env.name}
-                        </div>
-                        <code className="mt-1 block font-mono text-[0.7rem] text-muted-foreground/90">
-                          {env.slug}
-                        </code>
+                        <div className="data-table-primary-label">{env.name}</div>
+                        <code className="data-table-mono-meta">{env.slug}</code>
                         {env.keyHint ? (
                           <code
                             className={cn(
@@ -630,8 +621,7 @@ export default function EnvironmentsClient({
               })}
             </TableBody>
           </Table>
-          </CardContent>
-        </Card>
+        </div>
       )}
     </div>
   );

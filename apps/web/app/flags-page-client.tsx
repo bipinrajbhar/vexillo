@@ -236,26 +236,22 @@ export default function FlagsPageClient({
           </Alert>
         )
       ) : (
-        <div className="surface-card page-enter page-enter-delay-2 overflow-hidden">
-          {/* border-separate: sticky column backgrounds fail with default border-collapse: collapse */}
-          <Table ref={tableScrollRef} className="border-separate border-spacing-0">
+        <div className="table-shell page-enter page-enter-delay-2">
+          <Table ref={tableScrollRef} className="data-table">
             <TableHeader>
-              <TableRow className="hover:bg-transparent [&_th]:border-b [&_th]:border-border">
+              <TableRow className="data-table-head-row">
                 <TableHead
                   className={cn(
-                    "sticky left-0 z-20 min-w-[200px] border-r border-border bg-card ps-5 font-medium text-foreground transition-shadow duration-200 ease-out",
+                    "data-table-th data-table-sticky-flag sticky left-0 z-30 min-w-[200px] border-r border-border ps-5 transition-shadow duration-200 ease-out",
                     stickyEdgeShadow && "shadow-[var(--surface-shadow-sticky)]",
                   )}
                 >
                   Flag
                 </TableHead>
-                <TableHead className="hidden min-w-[180px] font-medium text-foreground md:table-cell">
-                  Description
-                </TableHead>
                 {initialEnvironments.map((env) => (
                   <TableHead
                     key={env.id}
-                    className="text-center font-medium text-foreground whitespace-normal"
+                    className="data-table-th text-center whitespace-normal"
                     title={env.name}
                   >
                     <span className="inline-block max-w-[7rem] leading-tight">{env.name}</span>
@@ -285,80 +281,80 @@ export default function FlagsPageClient({
                       : "border-l-2 border-l-border";
 
                 return (
-                <TableRow
-                  key={flag.key}
-                  className={`group/flag ${rowBorder} [&_td]:border-b [&_td]:border-border`}
-                >
-                  <TableCell
-                    className={cn(
-                      "sticky left-0 z-10 border-r border-border bg-card py-3 align-top transition-[box-shadow,background-color] duration-200 ease-out group-hover/flag:bg-muted ps-5",
-                      stickyEdgeShadow && "shadow-[var(--surface-shadow-sticky)]",
-                    )}
-                  >
-                    <Link
-                      href={`/flags/${encodeURIComponent(flag.key)}`}
-                      className="group/link block py-1"
+                  <TableRow key={flag.key} className={cn("group/flag data-table-body-row", rowBorder)}>
+                    <TableCell
+                      className={cn(
+                        "data-table-sticky-flag sticky left-0 z-20 border-r border-border py-3 align-top transition-[box-shadow,background-color] duration-200 ease-out group-hover/flag:bg-muted ps-5",
+                        stickyEdgeShadow && "shadow-[var(--surface-shadow-sticky)]",
+                      )}
                     >
-                      <span className="text-[0.9375rem] font-medium text-foreground group-hover/link:text-primary">
-                        {flag.name}
-                      </span>
-                      <code className="mt-1 block truncate font-mono text-[0.72rem] text-muted-foreground">
-                        {flag.key}
-                      </code>
-                      {envTotal > 0 ? (
-                        <p
-                          className="mt-2 text-[0.6875rem] tabular-nums tracking-wide text-muted-foreground"
-                          title={`Enabled in ${enabledCount} of ${envTotal} environments`}
-                        >
-                          <span
-                            className={
-                              rollout === "full"
-                                ? "font-medium text-foreground"
-                                : rollout === "partial"
-                                  ? "font-medium text-amber-800 dark:text-amber-400"
-                                  : undefined
-                            }
+                      <Link
+                        href={`/flags/${encodeURIComponent(flag.key)}`}
+                        className="group/link block py-1"
+                        title={
+                          flag.description.trim()
+                            ? `${flag.name} — ${flag.description.trim()}`
+                            : undefined
+                        }
+                      >
+                        <span className="data-table-primary-label group-hover/link:text-primary">
+                          {flag.name}
+                        </span>
+                        <code className="data-table-mono-meta truncate">{flag.key}</code>
+                        {flag.description.trim() ? (
+                          <p className="mt-1.5 max-w-[20rem] line-clamp-2 text-[0.8125rem] leading-snug text-muted-foreground">
+                            {flag.description.trim()}
+                          </p>
+                        ) : null}
+                        {envTotal > 0 ? (
+                          <p
+                            className="mt-2 text-[0.6875rem] tabular-nums tracking-wide text-muted-foreground"
+                            title={`Enabled in ${enabledCount} of ${envTotal} environments`}
                           >
-                            {enabledCount}/{envTotal}
-                          </span>{" "}
-                          <span className="text-muted-foreground">environments on</span>
-                        </p>
-                      ) : null}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="hidden max-w-xs align-top md:table-cell">
-                    <span className="line-clamp-2 text-sm text-muted-foreground">
-                      {flag.description || "—"}
-                    </span>
-                  </TableCell>
-                  {initialEnvironments.map((env) => {
-                    const on = flag.states[env.slug] ?? false;
-                    const busy = toggleBusy === `${flag.key}:${env.id}`;
-                    return (
-                      <TableCell key={env.id} className="text-center align-middle">
-                        {isAdmin ? (
-                          <div className="flex justify-center">
-                            <Switch
-                              checked={on}
-                              disabled={busy}
-                              onCheckedChange={() => toggleFlag(flag.key, env.id)}
-                              aria-label={`${flag.name} in ${env.name}`}
-                            />
-                          </div>
-                        ) : (
-                          <div className="flex justify-center">
-                            <Badge
-                              variant={on ? "default" : "secondary"}
-                              className="rounded-lg px-2.5 font-mono text-[0.65rem] tracking-wide"
+                            <span
+                              className={
+                                rollout === "full"
+                                  ? "font-medium text-foreground"
+                                  : rollout === "partial"
+                                    ? "font-medium text-amber-800 dark:text-amber-400"
+                                    : undefined
+                              }
                             >
-                              {on ? "ON" : "OFF"}
-                            </Badge>
-                          </div>
-                        )}
-                      </TableCell>
-                    );
-                  })}
-                </TableRow>
+                              {enabledCount}/{envTotal}
+                            </span>{" "}
+                            <span className="text-muted-foreground">environments on</span>
+                          </p>
+                        ) : null}
+                      </Link>
+                    </TableCell>
+                    {initialEnvironments.map((env) => {
+                      const on = flag.states[env.slug] ?? false;
+                      const busy = toggleBusy === `${flag.key}:${env.id}`;
+                      return (
+                        <TableCell key={env.id} className="text-center align-middle">
+                          {isAdmin ? (
+                            <div className="flex justify-center">
+                              <Switch
+                                checked={on}
+                                disabled={busy}
+                                onCheckedChange={() => toggleFlag(flag.key, env.id)}
+                                aria-label={`${flag.name} in ${env.name}`}
+                              />
+                            </div>
+                          ) : (
+                            <div className="flex justify-center">
+                              <Badge
+                                variant={on ? "default" : "secondary"}
+                                className="rounded-lg px-2.5 font-mono text-[0.65rem] tracking-wide"
+                              >
+                                {on ? "ON" : "OFF"}
+                              </Badge>
+                            </div>
+                          )}
+                        </TableCell>
+                      );
+                    })}
+                  </TableRow>
                 );
               })}
             </TableBody>
