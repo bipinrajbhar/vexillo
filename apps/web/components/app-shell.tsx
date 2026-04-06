@@ -40,7 +40,7 @@ export function AppShell({
   return (
     <SidebarProvider>
       <AppSidebar session={session} />
-      <SidebarInset className="min-h-dvh">
+      <SidebarInset className="min-h-dvh min-w-0">
         <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur-sm supports-backdrop-filter:bg-background/80 sm:px-6">
           <SidebarTrigger className="-ms-1" />
           <div
@@ -56,7 +56,7 @@ export function AppShell({
         </header>
         <main
           id="main-content"
-          className="main-canvas relative flex min-h-0 flex-1 flex-col"
+          className="main-canvas relative flex min-h-0 min-w-0 flex-1 flex-col"
         >
           {children}
         </main>
