@@ -7,8 +7,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  /* Headings use the same stack as `font-sans` (Tailwind default: system UI fonts) */
-  --font-heading: var(--font-sans);
+  /* Geist (Vercel) — variables set by `geist/font` classes on `<html>` */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,73 +50,78 @@
 }
 
 :root {
-  /* Semantic tokens reference Tailwind’s default theme colors (see `tailwindcss/theme.css`) */
-  --background: var(--color-zinc-50);
-  --foreground: var(--color-zinc-950);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-950);
-  --popover: var(--color-white);
-  --popover-foreground: var(--color-zinc-950);
-  --primary: var(--color-zinc-900);
-  --primary-foreground: var(--color-zinc-50);
-  --secondary: var(--color-zinc-100);
-  --secondary-foreground: var(--color-zinc-900);
-  --muted: var(--color-zinc-100);
-  --muted-foreground: var(--color-zinc-500);
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
+  /*
+   * Vercel-adjacent: pure white field, ink type, hairline borders, black CTAs.
+   */
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --muted: #fafafa;
+  --muted-foreground: #737373;
+  --border: #eaeaea;
+  --input: #eaeaea;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #171717;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #eaeaea;
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --ring: #a3a3a3;
+  --sidebar-primary: #000000;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #a3a3a3;
   --destructive: var(--color-red-600);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-200);
-  --ring: var(--color-zinc-400);
-  --chart-1: var(--color-blue-600);
-  --chart-2: var(--color-emerald-600);
-  --chart-3: var(--color-amber-600);
-  --chart-4: var(--color-violet-600);
-  --chart-5: var(--color-rose-600);
-  --radius: 0.5rem;
-  --sidebar: var(--color-zinc-100);
-  --sidebar-foreground: var(--color-zinc-950);
-  --sidebar-primary: var(--color-zinc-900);
-  --sidebar-primary-foreground: var(--color-zinc-50);
-  --sidebar-accent: var(--color-zinc-200);
-  --sidebar-accent-foreground: var(--color-zinc-900);
-  --sidebar-border: var(--color-zinc-200);
-  --sidebar-ring: var(--color-zinc-400);
+  --chart-1: #525252;
+  --chart-2: #737373;
+  --chart-3: #a3a3a3;
+  --chart-4: #404040;
+  --chart-5: #d4d4d4;
+  --radius: 0.375rem;
 }
 
 .dark {
-  --background: var(--color-zinc-950);
-  --foreground: var(--color-zinc-50);
-  --card: var(--color-zinc-900);
-  --card-foreground: var(--color-zinc-50);
-  --popover: var(--color-zinc-900);
-  --popover-foreground: var(--color-zinc-50);
-  --primary: var(--color-zinc-50);
-  --primary-foreground: var(--color-zinc-950);
-  --secondary: var(--color-zinc-800);
-  --secondary-foreground: var(--color-zinc-50);
-  --muted: var(--color-zinc-800);
-  --muted-foreground: var(--color-zinc-400);
-  --accent: var(--color-zinc-800);
-  --accent-foreground: var(--color-zinc-50);
+  /*
+   * Vercel dark: #000 canvas, hairline #262626 chrome, soft elevated #0a0a0a panels.
+   */
+  --background: #000000;
+  --foreground: #ededed;
+  --card: #0a0a0a;
+  --card-foreground: #ededed;
+  --popover: #0a0a0a;
+  --popover-foreground: #ededed;
+  --secondary: #171717;
+  --secondary-foreground: #ededed;
+  --muted: #171717;
+  --muted-foreground: #a1a1a1;
+  --border: #262626;
+  --input: #262626;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #ededed;
+  --sidebar-accent: #171717;
+  --sidebar-accent-foreground: #ededed;
+  --sidebar-border: #262626;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --accent: #171717;
+  --accent-foreground: #ededed;
+  --ring: #525252;
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-ring: #525252;
   --destructive: var(--color-red-500);
-  --border: var(--color-zinc-800);
-  --input: var(--color-zinc-800);
-  --ring: var(--color-zinc-500);
-  --chart-1: var(--color-blue-400);
-  --chart-2: var(--color-emerald-400);
-  --chart-3: var(--color-amber-400);
-  --chart-4: var(--color-violet-400);
-  --chart-5: var(--color-rose-400);
-  --sidebar: var(--color-zinc-900);
-  --sidebar-foreground: var(--color-zinc-50);
-  --sidebar-primary: var(--color-zinc-50);
-  --sidebar-primary-foreground: var(--color-zinc-950);
-  --sidebar-accent: var(--color-zinc-800);
-  --sidebar-accent-foreground: var(--color-zinc-50);
-  --sidebar-border: var(--color-zinc-800);
-  --sidebar-ring: var(--color-zinc-500);
+  --chart-1: #d4d4d4;
+  --chart-2: #a3a3a3;
+  --chart-3: #737373;
+  --chart-4: #e5e5e5;
+  --chart-5: #525252;
 }
 
 @layer base {

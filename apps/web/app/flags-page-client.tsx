@@ -193,7 +193,7 @@ export default function FlagsPageClient({
         <div className="surface-card page-enter page-enter-delay-2 overflow-hidden">
           <Table>
             <TableHeader>
-              <TableRow className="border-border/60">
+              <TableRow>
                 <TableHead className="min-w-[200px] ps-5 font-medium text-foreground">
                   Flag
                 </TableHead>
@@ -213,7 +213,7 @@ export default function FlagsPageClient({
             </TableHeader>
             <TableBody>
               {filtered.map((flag) => (
-                <TableRow key={flag.key} className="border-border/50">
+                <TableRow key={flag.key}>
                   <TableCell className="ps-5 align-top">
                     <Link
                       href={`/flags/${encodeURIComponent(flag.key)}`}

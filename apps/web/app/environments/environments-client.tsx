@@ -83,7 +83,7 @@ function OriginAllowlistChips({
       {value.map((origin, index) => (
         <span
           key={`${envId}-origin-${index}`}
-          className="inline-flex max-w-[min(100%,26rem)] items-center gap-0.5 rounded-md border border-border/90 bg-muted/45 px-2 py-1 font-mono text-[0.6875rem] leading-tight text-foreground dark:bg-muted/30"
+          className="inline-flex max-w-[min(100%,26rem)] items-center gap-0.5 rounded-md border border-border bg-muted/45 px-2 py-1 font-mono text-[0.6875rem] leading-tight text-foreground dark:bg-muted/30"
         >
           <span className="min-w-0 truncate" title={origin}>
             {origin}

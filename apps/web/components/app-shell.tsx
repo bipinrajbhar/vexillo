@@ -49,7 +49,7 @@ export function AppShell({
           >
             {title}
           </div>
-          <div className="flex h-6 w-px shrink-0 bg-border/60" aria-hidden />
+          <div className="flex h-6 w-px shrink-0 bg-border" aria-hidden />
           <div className="flex shrink-0 items-center gap-2">
             <ModeToggle />
           </div>

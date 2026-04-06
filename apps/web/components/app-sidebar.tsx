@@ -26,11 +26,8 @@ export function AppSidebar({
   const isAdmin = session?.user.role === "admin"
 
   return (
-    <Sidebar
-      collapsible="offcanvas"
-      className="border-r border-sidebar-border/80 bg-sidebar"
-    >
-      <SidebarHeader className="gap-0 border-b border-sidebar-border/70 px-4 py-5">
+    <Sidebar collapsible="offcanvas" className="bg-sidebar">
+      <SidebarHeader className="gap-0 border-b border-sidebar-border px-4 py-5">
         <Link
           href="/"
           className="block rounded-sm outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
@@ -83,7 +80,7 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="border-t border-sidebar-border/70 p-4">
+      <SidebarFooter className="border-t border-sidebar-border p-4">
         {session ? (
           <>
             <p
