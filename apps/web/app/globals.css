@@ -210,37 +210,50 @@
    * Feature flags / environments tables — shared “elevated shell” and legible density.
    */
   .table-shell {
-    @apply overflow-hidden rounded-lg border border-border bg-card;
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+    @apply overflow-hidden rounded-xl border border-border bg-background;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04);
   }
 
   .dark .table-shell {
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.22);
   }
 
   .data-table {
     @apply w-full border-collapse text-sm;
   }
 
+  /* Tailwind UI “Users”-style: breathable rows, calm header */
+  .data-table-comfy thead th {
+    @apply py-4;
+  }
+
+  .data-table-comfy tbody td {
+    @apply py-5;
+  }
+
   .data-table-head-row {
-    @apply border-b border-border bg-muted/40 dark:bg-muted/15;
+    @apply border-b border-border bg-muted/35 dark:bg-muted/15;
   }
 
   .data-table-th {
-    @apply text-[0.6875rem] font-semibold uppercase tracking-[0.1em] text-muted-foreground;
+    @apply text-xs font-semibold tracking-normal text-foreground;
   }
 
   .data-table-body-row {
-    @apply transition-[background-color] duration-150 ease-out hover:bg-muted/25;
+    @apply transition-[background-color] duration-150 ease-out hover:bg-muted/30 dark:hover:bg-muted/15;
+  }
+
+  /* Name + secondary line (email / key / slug) */
+  .data-table-cell-stack {
+    @apply flex min-w-0 flex-col items-start gap-0.5;
   }
 
   .data-table-primary-label {
-    @apply block max-w-full truncate text-[0.9375rem] font-medium tracking-[-0.015em] text-foreground;
+    @apply block max-w-full truncate text-[0.9375rem] font-semibold tracking-[-0.015em] text-foreground;
   }
 
-  /* Single line: avoid breaking at hyphens in keys/slugs; ellipsis when needed. */
   .data-table-mono-meta {
-    @apply mt-1 block w-full min-w-0 max-w-full truncate font-mono text-[0.75rem] leading-snug text-muted-foreground;
+    @apply block w-full min-w-0 max-w-full truncate font-mono text-[0.8125rem] leading-snug text-muted-foreground;
   }
 
   /* Sonner (shadcn): toast uses same elevation as other floating UI */

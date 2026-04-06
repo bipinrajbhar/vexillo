@@ -433,33 +433,32 @@ export default function EnvironmentsClient({
 
   return (
     <div className="page-container page-container-wide flex min-w-0 flex-1 flex-col pb-16">
-      <header className="page-enter mb-8 md:mb-10">
-        <div className="max-w-2xl">
+      <header className="page-enter mb-8 flex flex-col gap-6 lg:mb-10 lg:flex-row lg:items-end lg:justify-between lg:gap-8">
+        <div className="min-w-0 max-w-2xl">
           <p className="page-eyebrow">Access control</p>
           <h1 className="page-title mt-1">Environments</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            SDK keys and per-environment browser origins. New keys show once in a dialog — copy them
-            before closing.
+            SDK keys and per-environment browser CORS rules. New secrets appear once in a dialog—copy
+            them before closing.
           </p>
         </div>
+        {isAdmin ? (
+          <div className="flex shrink-0">
+            <Button
+              type="button"
+              size="lg"
+              className="w-full gap-2 sm:w-auto"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="size-4" aria-hidden />
+              Add environment
+            </Button>
+          </div>
+        ) : null}
       </header>
 
       {isAdmin ? (
-        <div className="page-enter page-enter-delay-1 mb-5 flex flex-col gap-4 sm:flex-row sm:justify-end sm:gap-x-5 sm:gap-y-3">
-          <div className="flex w-full flex-col gap-1.5 sm:w-auto">
-            <span className="invisible text-xs font-medium select-none" aria-hidden>
-              Actions
-            </span>
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <Button
-                type="button"
-                size="lg"
-                className="w-full shrink-0 gap-2 sm:w-auto"
-                onClick={() => setCreateOpen(true)}
-              >
-                <Plus className="size-4" aria-hidden />
-                Add environment
-              </Button>
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogContent showCloseButton>
                 <DialogHeader>
                   <DialogTitle>New environment</DialogTitle>
@@ -492,9 +491,7 @@ export default function EnvironmentsClient({
                   </DialogFooter>
                 </form>
               </DialogContent>
-            </Dialog>
-          </div>
-        </div>
+        </Dialog>
       ) : null}
 
       <Dialog open={!!secretDialog} onOpenChange={(o) => !o && setSecretDialog(null)}>
@@ -562,7 +559,7 @@ export default function EnvironmentsClient({
         </Alert>
       ) : (
         <div className="table-shell page-enter page-enter-delay-2">
-          <Table ref={tableScrollRef} className="data-table">
+          <Table ref={tableScrollRef} className="data-table data-table-comfy">
             <TableHeader>
               <TableRow className="data-table-head-row">
                 <TableHead
@@ -581,7 +578,7 @@ export default function EnvironmentsClient({
                 </TableHead>
                 {isAdmin ? (
                   <TableHead className="data-table-th w-[1%] whitespace-nowrap pe-5 text-end">
-                    <span className="normal-case tracking-normal">Actions</span>
+                    <span className="sr-only">Actions</span>
                   </TableHead>
                 ) : null}
               </TableRow>
@@ -593,20 +590,18 @@ export default function EnvironmentsClient({
                   <TableRow key={env.id} className="group/env data-table-body-row">
                     <TableCell
                       className={cn(
-                        "data-table-sticky-flag sticky left-0 z-20 min-w-0 border-r border-border py-3 align-top transition-[box-shadow,background-color] duration-200 ease-out group-hover/env:bg-muted ps-5",
+                        "data-table-sticky-flag sticky left-0 z-20 min-w-0 border-r border-border align-top transition-[box-shadow,background-color] duration-200 ease-out group-hover/env:bg-muted/50 ps-5",
                         stickyEdgeShadow && "shadow-[var(--surface-shadow-sticky)]",
                       )}
                     >
-                      <div className="min-w-0 py-1">
+                      <div className="min-w-0 py-0.5">
                         <div
-                          className="data-table-primary-label normal-case"
+                          className="data-table-cell-stack"
                           title={`${env.name} — ${env.slug}`}
                         >
-                          {env.name}
+                          <div className="data-table-primary-label">{env.name}</div>
+                          <code className="data-table-mono-meta">{env.slug}</code>
                         </div>
-                        <code className="data-table-mono-meta" title={env.slug}>
-                          {env.slug}
-                        </code>
                         {env.keyHint ? (
                           <code
                             className={cn(
@@ -646,23 +641,23 @@ export default function EnvironmentsClient({
                     </TableCell>
                     {isAdmin ? (
                       <TableCell className="w-[1%] whitespace-nowrap align-top pe-5">
-                        <div className="flex justify-end py-1">
+                        <div className="flex justify-end py-0.5">
                           <Button
                             type="button"
+                            variant="link"
                             size="sm"
-                            variant="outline"
-                            className="gap-1.5"
+                            className="h-auto gap-1.5 px-0 font-medium"
                             disabled={rotateBusy === env.id}
                             onClick={() => void rotateKey(env.id)}
                           >
                             {rotateBusy === env.id ? (
                               <>
-                                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                                <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
                                 Rotating…
                               </>
                             ) : (
                               <>
-                                <RotateCw className="size-3.5 opacity-70" aria-hidden />
+                                <RotateCw className="size-3.5 shrink-0 opacity-70" aria-hidden />
                                 Rotate key
                               </>
                             )}

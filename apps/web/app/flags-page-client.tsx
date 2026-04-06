@@ -4,11 +4,10 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Info, Loader2, Plus, Search } from "lucide-react";
-import { toast } from "sonner";
 
 import CreateFlagForm from "@/app/components/create-flag-form";
-import { ConfirmFlagToggleDialog } from "@/components/confirm-flag-toggle-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,11 +15,9 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -64,19 +61,9 @@ export default function FlagsPageClient({
   const [flags, setFlags] = React.useState(initialFlags);
   const [query, setQuery] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
-  const [toggleBusy, setToggleBusy] = React.useState<string | null>(null);
   const [primaryEnvId, setPrimaryEnvId] = React.useState<string>(() =>
     pickDefaultPrimaryEnvId(initialEnvironments),
   );
-  const [confirmToggle, setConfirmToggle] = React.useState<null | {
-    flagKey: string;
-    flagName: string;
-    envId: string;
-    envName: string;
-    currentEnabled: boolean;
-    nextEnabled: boolean;
-  }>(null);
-  const [confirmBusy, setConfirmBusy] = React.useState(false);
 
   const tableScrollRef = React.useRef<HTMLDivElement>(null);
   /** Drop-shadow on sticky column only while scrolled — signals overlap, not default chrome. */
@@ -170,59 +157,50 @@ export default function FlagsPageClient({
     });
   }
 
-  async function performToggle(flagKey: string, environmentId: string): Promise<boolean> {
-    const busyKey = `${flagKey}:${environmentId}`;
-    setToggleBusy(busyKey);
-    try {
-      const res = await fetch(`/api/flags/${encodeURIComponent(flagKey)}/toggle`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ environmentId }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail =
-          typeof err.error === "string"
-            ? err.error
-            : `Could not update flag (${res.status}). Try again.`;
-        toast.error(detail);
-        return false;
-      }
-      const { enabled } = (await res.json()) as { enabled: boolean };
-      setFlags((prev) =>
-        prev.map((f) => {
-          if (f.key !== flagKey) return f;
-          const env = initialEnvironments.find((e) => e.id === environmentId);
-          if (!env) return f;
-          return {
-            ...f,
-            states: { ...f.states, [env.slug]: enabled },
-          };
-        }),
-      );
-      return true;
-    } finally {
-      setToggleBusy(null);
-    }
-  }
-
   const listIsEmpty = !query.trim() && filtered.length === 0;
 
   return (
     <div className="page-container page-container-wide flex flex-1 flex-col">
-      <header className="page-enter mb-8 md:mb-10">
-        <div className="max-w-2xl">
+      <header className="page-enter mb-8 flex flex-col gap-6 lg:mb-10 lg:flex-row lg:items-end lg:justify-between lg:gap-8">
+        <div className="min-w-0 max-w-2xl">
           <h1 className="page-title">Feature flags</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Toggle flags per environment. Changes apply on the next SDK fetch.
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Open a flag&apos;s page to compare all environments in one place.
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Every flag in your project, with its key and rollout notes. Use the environment selector
+            below to choose which rollout you’re viewing; open a flag to toggle it per environment
+            (changes apply on the next SDK fetch).
           </p>
         </div>
+        {isAdmin ? (
+          <div className="flex shrink-0">
+            <Button
+              type="button"
+              size="lg"
+              className="w-full gap-2 sm:w-auto"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="size-4" aria-hidden />
+              New flag
+            </Button>
+          </div>
+        ) : null}
       </header>
 
-      <div className="page-enter page-enter-delay-1 mb-5 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-5 sm:gap-y-3">
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent
+          className="max-h-[min(90dvh,720px)] overflow-y-auto sm:max-w-lg"
+          showCloseButton
+        >
+          <DialogHeader>
+            <DialogTitle>New flag</DialogTitle>
+            <DialogDescription>
+              Add a flag and enable it per environment after creation.
+            </DialogDescription>
+          </DialogHeader>
+          <CreateFlagForm onSubmit={handleCreate} onCancel={() => setCreateOpen(false)} />
+        </DialogContent>
+      </Dialog>
+
+      <div className="page-enter page-enter-delay-1 mb-6 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-5 sm:gap-y-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:max-w-md">
           <Label htmlFor="flag-search" className="text-xs font-medium text-muted-foreground">
             Search
@@ -245,7 +223,7 @@ export default function FlagsPageClient({
         {initialEnvironments.length > 0 ? (
           <div className="flex w-full min-w-48 flex-col gap-1.5 sm:w-auto sm:max-w-[16rem]">
             <Label htmlFor="primary-env" className="text-xs font-medium text-muted-foreground">
-              Showing values for
+              Showing status for
             </Label>
             <select
               id="primary-env"
@@ -255,7 +233,7 @@ export default function FlagsPageClient({
               )}
               value={primaryEnv?.id ?? ""}
               onChange={(e) => setPrimaryEnvId(e.target.value)}
-              aria-label="Environment shown in list"
+              aria-label="Environment for on or off column"
             >
               {initialEnvironments.map((env) => (
                 <option key={env.id} value={env.id}>
@@ -263,34 +241,6 @@ export default function FlagsPageClient({
                 </option>
               ))}
             </select>
-          </div>
-        ) : null}
-        {isAdmin ? (
-          <div className="flex w-full flex-col gap-1.5 sm:ms-auto sm:w-auto">
-            <span className="invisible text-xs font-medium select-none" aria-hidden>
-              Actions
-            </span>
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger render={<Button size="lg" className="w-full shrink-0 gap-2 sm:w-auto" />}>
-                <Plus className="size-4" aria-hidden />
-                New flag
-              </DialogTrigger>
-              <DialogContent
-                className="max-h-[min(90dvh,720px)] overflow-y-auto sm:max-w-lg"
-                showCloseButton
-              >
-                <DialogHeader>
-                  <DialogTitle>New flag</DialogTitle>
-                  <DialogDescription>
-                    Add a flag and enable it per environment after creation.
-                  </DialogDescription>
-                </DialogHeader>
-                <CreateFlagForm
-                  onSubmit={handleCreate}
-                  onCancel={() => setCreateOpen(false)}
-                />
-              </DialogContent>
-            </Dialog>
           </div>
         ) : null}
       </div>
@@ -346,23 +296,23 @@ export default function FlagsPageClient({
           )}
           aria-busy={isListPending}
         >
-          <Table ref={tableScrollRef} className="data-table">
+          <Table ref={tableScrollRef} className="data-table data-table-comfy">
             <TableHeader>
               <TableRow className="data-table-head-row">
                 <TableHead
                   className={cn(
-                    "data-table-th data-table-sticky-flag sticky left-0 z-30 min-w-[200px] border-r border-border ps-5 transition-shadow duration-200 ease-out",
+                    "data-table-th data-table-sticky-flag sticky left-0 z-30 min-w-[220px] border-r border-border ps-5 transition-shadow duration-200 ease-out",
                     stickyEdgeShadow && "shadow-[var(--surface-shadow-sticky)]",
                   )}
                 >
                   Flag
                 </TableHead>
                 <TableHead
-                  className="data-table-th w-[1%] text-center whitespace-normal"
-                  title={`In ${primaryEnv.name}`}
+                  scope="col"
+                  className="data-table-th w-[1%] whitespace-normal text-center font-normal"
                 >
-                  <span className="inline-block max-w-48 leading-tight normal-case tracking-normal">
-                    {primaryEnv.name}
+                  <span className="sr-only">
+                    On or off in {primaryEnv.name}
                   </span>
                 </TableHead>
               </TableRow>
@@ -375,33 +325,32 @@ export default function FlagsPageClient({
                 const envTotal = initialEnvironments.length;
 
                 const on = flag.states[primaryEnv.slug] ?? false;
-                const busy = toggleBusy === `${flag.key}:${primaryEnv.id}`;
-                const dialogForThisCell =
-                  confirmToggle?.flagKey === flag.key && confirmToggle.envId === primaryEnv.id;
 
                 return (
                   <TableRow key={flag.key} className="group/flag data-table-body-row">
                     <TableCell
                       className={cn(
-                        "data-table-sticky-flag sticky left-0 z-20 min-w-0 border-r border-border py-3 align-top transition-[box-shadow,background-color] duration-200 ease-out group-hover/flag:bg-muted ps-5",
+                        "data-table-sticky-flag sticky left-0 z-20 min-w-0 border-r border-border align-top transition-[box-shadow,background-color] duration-200 ease-out group-hover/flag:bg-muted/50 ps-5",
                         stickyEdgeShadow && "shadow-[var(--surface-shadow-sticky)]",
                       )}
                     >
                       <Link
                         href={`/flags/${encodeURIComponent(flag.key)}`}
-                        className="group/link block min-w-0 py-1"
+                        className="group/link block min-w-0 py-0.5"
                         title={
                           [flag.name, flag.key !== flag.name ? flag.key : null, flag.description.trim() || null]
                             .filter(Boolean)
                             .join(" — ") || undefined
                         }
                       >
-                        <span className="data-table-primary-label group-hover/link:text-primary">
-                          {flag.name}
-                        </span>
-                        <code className="data-table-mono-meta">{flag.key}</code>
+                        <div className="data-table-cell-stack">
+                          <span className="data-table-primary-label group-hover/link:text-primary">
+                            {flag.name}
+                          </span>
+                          <code className="data-table-mono-meta">{flag.key}</code>
+                        </div>
                         {flag.description.trim() ? (
-                          <p className="mt-1.5 max-w-[20rem] line-clamp-2 text-[0.8125rem] leading-snug text-muted-foreground">
+                          <p className="mt-2 max-w-[22rem] line-clamp-2 text-[0.8125rem] leading-snug text-muted-foreground">
                             {flag.description.trim()}
                           </p>
                         ) : null}
@@ -418,43 +367,18 @@ export default function FlagsPageClient({
                         ) : null}
                       </Link>
                     </TableCell>
-                    <TableCell className="w-[1%] text-center align-middle whitespace-nowrap">
-                      {isAdmin ? (
-                        <div className="flex items-center justify-center gap-2">
-                          {busy ? (
-                            <Loader2
-                              className="size-3.5 shrink-0 animate-spin text-muted-foreground"
-                              aria-hidden
-                            />
-                          ) : null}
-                          <Switch
-                            checked={on}
-                            disabled={busy || dialogForThisCell}
-                            onCheckedChange={(checked) => {
-                              if (checked === on) return;
-                              setConfirmToggle({
-                                flagKey: flag.key,
-                                flagName: flag.name,
-                                envId: primaryEnv.id,
-                                envName: primaryEnv.name,
-                                currentEnabled: on,
-                                nextEnabled: checked,
-                              });
-                            }}
-                            aria-label={`${flag.name} in ${primaryEnv.name}, ${on ? "on" : "off"}. Confirm to change.`}
-                          />
-                        </div>
-                      ) : (
-                        <p
-                          role="status"
-                          className={cn(
-                            "mx-auto text-sm font-medium",
-                            on ? "text-foreground" : "text-muted-foreground",
-                          )}
-                        >
-                          {on ? "Enabled" : "Disabled"}
-                        </p>
-                      )}
+                    <TableCell className="w-[1%] whitespace-nowrap text-center align-middle">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "rounded-full px-2.5 py-0.5 text-xs font-medium tabular-nums",
+                          on
+                            ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-950 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-50"
+                            : "border-border bg-muted/30 text-muted-foreground",
+                        )}
+                      >
+                        {on ? "On" : "Off"}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 );
@@ -483,29 +407,6 @@ export default function FlagsPageClient({
           </p>
         </div>
       ) : null}
-
-      <ConfirmFlagToggleDialog
-        open={confirmToggle !== null}
-        onOpenChange={(open) => {
-          if (!open && !confirmBusy) setConfirmToggle(null);
-        }}
-        flagName={confirmToggle?.flagName ?? ""}
-        flagKey={confirmToggle?.flagKey ?? ""}
-        environmentName={confirmToggle?.envName ?? ""}
-        currentEnabled={confirmToggle?.currentEnabled ?? false}
-        nextEnabled={confirmToggle?.nextEnabled ?? false}
-        confirmBusy={confirmBusy}
-        onConfirm={async () => {
-          if (!confirmToggle) return;
-          setConfirmBusy(true);
-          try {
-            const ok = await performToggle(confirmToggle.flagKey, confirmToggle.envId);
-            if (ok) setConfirmToggle(null);
-          } finally {
-            setConfirmBusy(false);
-          }
-        }}
-      />
     </div>
   );
 }
