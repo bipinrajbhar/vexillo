@@ -212,7 +212,7 @@ export default function FlagDetailClient({
             <TableRow className="data-table-head-row">
               <TableHead className="data-table-th ps-5">Environment</TableHead>
               <TableHead scope="col" className="data-table-th pe-5 text-end">
-                Enabled
+                <span className="sr-only">Toggle</span>
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -396,7 +396,7 @@ export default function FlagDetailClient({
             </CardFooter>
           </Card>
 
-          <Card className="page-enter page-enter-delay-3 border-destructive/25 bg-destructive/3 shadow-(--surface-shadow) dark:bg-destructive/6">
+          <Card className="page-enter page-enter-delay-3 border-destructive/25 bg-destructive/3 shadow-surface dark:bg-destructive/6">
             <CardContent className="pt-5">
               <h3 className="text-sm font-semibold text-destructive">Delete flag</h3>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">

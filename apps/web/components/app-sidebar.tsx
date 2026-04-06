@@ -92,7 +92,7 @@ export function AppSidebar({
             <SignOutButton
               variant="outline"
               size="sm"
-              className="w-full justify-center border-sidebar-border bg-sidebar-accent/35 text-sidebar-foreground shadow-[var(--surface-shadow-xs)] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:bg-sidebar-accent/25"
+              className="w-full justify-center border-sidebar-border bg-sidebar-accent/35 text-sidebar-foreground shadow-surface-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:bg-sidebar-accent/25"
             />
           </>
         ) : null}
