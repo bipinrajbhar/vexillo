@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Copy, Info, KeyRound, Plus, X } from "lucide-react";
+import { Check, Copy, Info, KeyRound, Plus, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -91,7 +91,7 @@ function OriginAllowlistChips({
           {!disabled ? (
             <button
               type="button"
-              className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
               onClick={() => onChange(value.filter((_, i) => i !== index))}
               aria-label={`Remove ${origin}`}
             >
@@ -165,6 +165,23 @@ export default function EnvironmentsClient({
   const [createBusy, setCreateBusy] = React.useState(false);
   const [createError, setCreateError] = React.useState("");
   const [secretDialog, setSecretDialog] = React.useState<string | null>(null);
+  const [secretCopied, setSecretCopied] = React.useState(false);
+  const copyResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    setSecretCopied(false);
+    if (copyResetRef.current) {
+      clearTimeout(copyResetRef.current);
+      copyResetRef.current = null;
+    }
+  }, [secretDialog]);
+
+  React.useEffect(
+    () => () => {
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    },
+    [],
+  );
   const [originDrafts, setOriginDrafts] = React.useState<Record<string, string[]>>({});
   const [originBusy, setOriginBusy] = React.useState<string | null>(null);
   const [rotateBusy, setRotateBusy] = React.useState<string | null>(null);
@@ -272,7 +289,17 @@ export default function EnvironmentsClient({
 
   async function copySecret() {
     if (!secretDialog) return;
-    await navigator.clipboard.writeText(secretDialog);
+    try {
+      await navigator.clipboard.writeText(secretDialog);
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+      setSecretCopied(true);
+      copyResetRef.current = setTimeout(() => {
+        setSecretCopied(false);
+        copyResetRef.current = null;
+      }, 2000);
+    } catch {
+      setSecretCopied(false);
+    }
   }
 
   return (
@@ -340,9 +367,24 @@ export default function EnvironmentsClient({
             {secretDialog}
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" className="gap-2" onClick={() => void copySecret()}>
-              <Copy className="size-4" aria-hidden />
-              Copy
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              aria-label={secretCopied ? "Copied to clipboard" : "Copy API key"}
+              onClick={() => void copySecret()}
+            >
+              {secretCopied ? (
+                <>
+                  <Check className="size-4" aria-hidden />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="size-4" aria-hidden />
+                  Copy
+                </>
+              )}
             </Button>
             <Button type="button" onClick={() => setSecretDialog(null)}>
               Done
