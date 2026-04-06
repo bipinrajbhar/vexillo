@@ -77,7 +77,7 @@ export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
                 }}
                 required
                 autoFocus
-                placeholder="My New Feature"
+                placeholder="e.g. Dark mode checkout"
               />
             </div>
           )}
@@ -97,11 +97,11 @@ export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
                   setKeyEdited(v !== slugify(form.getFieldValue('name')));
                 }}
                 required
-                placeholder="my-new-feature"
+                placeholder="dark-mode-checkout"
                 className="font-mono"
               />
               <p className="text-xs text-muted-foreground">
-                Auto-generated from name. Immutable after creation.
+                Auto-filled from the name. Can't be changed after the flag is created.
               </p>
             </div>
           )}
@@ -117,7 +117,7 @@ export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
                 onBlur={field.handleBlur}
                 onChange={(e) => field.handleChange(e.target.value)}
                 rows={3}
-                placeholder="What does this flag control?"
+                placeholder="What this flag does, who owns it, any relevant links…"
               />
             </div>
           )}

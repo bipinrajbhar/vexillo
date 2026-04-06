@@ -129,7 +129,7 @@ function OriginAllowlistChips({
                   >
                     <X className="size-3" strokeWidth={2} aria-hidden />
                   </TooltipTrigger>
-                  <TooltipContent side="top">Remove origin</TooltipContent>
+                  <TooltipContent side="top">Remove</TooltipContent>
                 </Tooltip>
               ) : null}
             </Badge>
@@ -164,7 +164,7 @@ function OriginAllowlistChips({
           </span>
         ) : null}
         <span className="sr-only" aria-live="polite">
-          {saving ? "Saving allowlist…" : ""}
+          {saving ? "Saving…" : ""}
         </span>
       </div>
 
@@ -173,9 +173,9 @@ function OriginAllowlistChips({
           <DialogHeader>
             <DialogTitle>Add origin</DialogTitle>
             <DialogDescription>
-              Full URL (scheme, host, and port when non-default).{" "}
-              <code className="rounded bg-muted px-1 py-px font-mono text-[0.8rem]">*</code> is open
-              CORS. Skips duplicates; changes save on their own.
+              Enter an origin like <span className="font-mono text-[0.8rem]">https://app.example.com</span>.{" "}
+              Use <code className="rounded bg-muted px-1 py-px font-mono text-[0.8rem]">*</code> to
+              allow all origins — only if you mean it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -435,11 +435,10 @@ export default function EnvironmentsClient({
     <div className="page-container page-container-wide flex min-w-0 flex-1 flex-col pb-16">
       <header className="page-enter mb-8 flex flex-col gap-6 lg:mb-10 lg:flex-row lg:items-end lg:justify-between lg:gap-8">
         <div className="min-w-0 max-w-2xl">
-          <p className="page-eyebrow">Access control</p>
+          <p className="page-eyebrow">Keys &amp; CORS</p>
           <h1 className="page-title mt-1">Environments</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            SDK keys and per-environment browser CORS rules. New secrets appear once in a dialog—copy
-            them before closing.
+            Each environment has an API key and a CORS allowlist. The full key is shown once — right after you create or rotate it.
           </p>
         </div>
         {isAdmin ? (
@@ -451,7 +450,7 @@ export default function EnvironmentsClient({
               onClick={() => setCreateOpen(true)}
             >
               <Plus className="size-4" aria-hidden />
-              Add environment
+              New environment
             </Button>
           </div>
         ) : null}
@@ -463,7 +462,7 @@ export default function EnvironmentsClient({
                 <DialogHeader>
                   <DialogTitle>New environment</DialogTitle>
                   <DialogDescription>
-                    The slug is generated from the name. You will see the API key after creation.
+                    The API key is shown once after creation — copy it somewhere safe.
                   </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={(e) => void handleCreate(e)} className="flex flex-col gap-6">
@@ -473,7 +472,7 @@ export default function EnvironmentsClient({
                       id="env-name"
                       value={newEnvName}
                       onChange={(e) => setNewEnvName(e.target.value)}
-                      placeholder="Production"
+                      placeholder="e.g. Production"
                       className="rounded-lg shadow-xs"
                       required
                     />
@@ -497,10 +496,9 @@ export default function EnvironmentsClient({
       <Dialog open={!!secretDialog} onOpenChange={(o) => !o && setSecretDialog(null)}>
         <DialogContent className="gap-5 sm:max-w-xl" showCloseButton>
           <DialogHeader className="gap-2">
-            <DialogTitle className="text-balance tracking-tight">API key</DialogTitle>
+            <DialogTitle className="text-balance tracking-tight">Copy your API key</DialogTitle>
             <DialogDescription className="text-pretty leading-snug">
-              Shown once. After closing you only see a hint in the table—use{" "}
-              <span className="font-medium text-foreground/90">Rotate key</span> for a new secret.
+              This is the only time you'll see the full key. After closing, only a masked preview is shown. Rotate the key any time from the table.
             </DialogDescription>
           </DialogHeader>
           <div className="min-w-0 space-y-2">
@@ -553,8 +551,8 @@ export default function EnvironmentsClient({
           <AlertTitle>No environments yet</AlertTitle>
           <AlertDescription>
             {isAdmin
-              ? "Add an environment to get an API key."
-              : "Ask an admin to add an environment."}
+              ? "Create one to get an API key and manage allowed origins."
+              : "Only an admin can create environments, keys, and allowlists."}
           </AlertDescription>
         </Alert>
       ) : (
@@ -571,7 +569,7 @@ export default function EnvironmentsClient({
                   Environment
                 </TableHead>
                 <TableHead className="data-table-th hidden min-w-36 md:table-cell">
-                  Key hint
+                  Key preview
                 </TableHead>
                 <TableHead className="data-table-th min-w-0">
                   Allowed origins (CORS)

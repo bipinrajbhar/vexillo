@@ -56,8 +56,7 @@ export function ConfirmFlagToggleDialog({
               {stateLabel(nextEnabled)}
             </p>
             <p className="text-[0.8125rem] leading-relaxed">
-              Applies to traffic in this environment after the SDK picks up config. You can revert from the
-              same toggle.
+              Takes effect on the next SDK refresh. Toggle again to revert.
             </p>
           </div>
         </DialogHeader>

@@ -192,19 +192,19 @@ export default function FlagDetailClient({
         {envTotal > 0 ? (
           <p className="text-sm tabular-nums text-muted-foreground">
             <span className="font-medium text-foreground">{envOnCount}</span>
-            <span>/</span>
-            <span className="text-muted-foreground">{envTotal}</span>
-            <span className="ms-1.5 text-muted-foreground">on</span>
+            <span className="text-muted-foreground"> of </span>
+            <span className="font-medium text-foreground">{envTotal}</span>
+            <span className="text-muted-foreground"> enabled</span>
           </p>
         ) : null}
       </div>
       {rollout.length === 0 ? (
         <p className="px-5 py-6 text-sm text-muted-foreground sm:px-6">
-          No environments yet. Add one under{" "}
+          No environments yet.{" "}
           <Link href="/environments" className="font-medium text-foreground underline-offset-4 hover:underline">
-            Environments
-          </Link>
-          .
+            Create one
+          </Link>{" "}
+          to enable per-environment toggles.
         </p>
       ) : (
         <Table className="data-table data-table-comfy">
@@ -286,7 +286,7 @@ export default function FlagDetailClient({
           <p className="pt-1 text-sm leading-snug text-muted-foreground">
             {initialFlag.description?.trim()
               ? initialFlag.description.trim()
-              : "No description provided."}
+              : "No description yet."}
           </p>
         ) : null}
       </div>
@@ -304,10 +304,10 @@ export default function FlagDetailClient({
           <Card className="surface-card page-enter mb-6 gap-0 overflow-hidden py-0 page-enter-delay-2">
             <CardHeader className="border-b border-border bg-muted/25 px-5 pb-2.5 pt-3 dark:bg-[rgb(255_255_255/0.04)]">
               <CardTitle className="text-[0.9375rem] font-semibold tracking-[-0.01em]">
-                Display &amp; notes
+                Label &amp; notes
               </CardTitle>
               <CardDescription className="text-[0.8125rem] leading-snug text-muted-foreground">
-                Editable label and description. The SDK key above does not change.
+                The flag key can't be changed. Everything else here is editable.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 px-5 pb-4 pt-3 sm:gap-5">
@@ -363,7 +363,7 @@ export default function FlagDetailClient({
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={3}
-                  placeholder="Optional context for your team…"
+                  placeholder="What this flag does, who owns it, any relevant links…"
                   className={cn(
                     "min-h-24 rounded-lg border-input/70 bg-muted/30 shadow-none",
                     "transition-[color,background-color,border-color,box-shadow]",
@@ -400,7 +400,7 @@ export default function FlagDetailClient({
             <CardContent className="pt-5">
               <h3 className="text-sm font-semibold text-destructive">Delete flag</h3>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                Removes the flag and all environment values. Update any apps still using this key.
+                Remove the flag from your code before deleting — otherwise flag checks may fail.
               </p>
               <Button
                 type="button"
@@ -418,10 +418,10 @@ export default function FlagDetailClient({
           <Dialog open={deleteOpen} onOpenChange={(o) => !deleteBusy && setDeleteOpen(o)}>
             <DialogContent showCloseButton className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>Delete this flag everywhere?</DialogTitle>
+                <DialogTitle>Delete {displayTitle}?</DialogTitle>
                 <DialogDescription className="text-pretty">
-                  This removes <strong className="text-foreground">{displayTitle}</strong> and its values
-                  for every environment. This cannot be undone.
+                  This can't be undone. All environment states for{" "}
+                  <strong className="text-foreground">{displayTitle}</strong> will be deleted too.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>

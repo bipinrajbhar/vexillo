@@ -165,9 +165,7 @@ export default function FlagsPageClient({
         <div className="min-w-0 max-w-2xl">
           <h1 className="page-title">Feature flags</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Every flag in your project, with its key and rollout notes. Use the environment selector
-            below to choose which rollout you’re viewing; open a flag to toggle it per environment
-            (changes apply on the next SDK fetch).
+            Toggle features on or off per environment. Click a flag to manage its rollout.
           </p>
         </div>
         {isAdmin ? (
@@ -193,7 +191,7 @@ export default function FlagsPageClient({
           <DialogHeader>
             <DialogTitle>New flag</DialogTitle>
             <DialogDescription>
-              Add a flag and enable it per environment after creation.
+              Starts off in all environments. Enable it per environment from the flag's detail page.
             </DialogDescription>
           </DialogHeader>
           <CreateFlagForm onSubmit={handleCreate} onCancel={() => setCreateOpen(false)} />
@@ -216,14 +214,14 @@ export default function FlagsPageClient({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search flags…"
               className="h-9 rounded-lg ps-10 shadow-xs"
-              aria-label="Search flags"
+              aria-label="Filter by name, key, or description"
             />
           </div>
         </div>
         {initialEnvironments.length > 0 ? (
           <div className="flex w-full min-w-48 flex-col gap-1.5 sm:w-auto sm:max-w-[16rem]">
             <Label htmlFor="primary-env" className="text-xs font-medium text-muted-foreground">
-              Showing status for
+              Status in
             </Label>
             <select
               id="primary-env"
@@ -233,7 +231,7 @@ export default function FlagsPageClient({
               )}
               value={primaryEnv?.id ?? ""}
               onChange={(e) => setPrimaryEnvId(e.target.value)}
-              aria-label="Environment for on or off column"
+              aria-label="Environment that controls the On / Off badge in each row"
             >
               {initialEnvironments.map((env) => (
                 <option key={env.id} value={env.id}>
@@ -248,12 +246,14 @@ export default function FlagsPageClient({
       {initialEnvironments.length === 0 ? (
         <Alert className="page-enter page-enter-delay-2 max-w-lg [&>svg]:text-muted-foreground">
           <Info aria-hidden />
-          <AlertTitle>No environments yet</AlertTitle>
+          <AlertTitle>Add an environment first</AlertTitle>
           <AlertDescription className="mt-2 block space-y-4">
-            <span className="block">Create an environment to enable columns here.</span>
+            <span className="block">
+              You need at least one environment to use flags. Add one first.
+            </span>
             {isAdmin ? (
               <Button className="w-full sm:w-auto" onClick={() => router.push("/environments")}>
-                Go to environments
+                Open environments
               </Button>
             ) : null}
           </AlertDescription>
@@ -261,8 +261,10 @@ export default function FlagsPageClient({
       ) : query.trim() && filtered.length === 0 ? (
         <Alert className="page-enter page-enter-delay-2 max-w-lg [&>svg]:text-muted-foreground">
           <Info aria-hidden />
-          <AlertTitle>No matches</AlertTitle>
-          <AlertDescription>Try another search term.</AlertDescription>
+          <AlertTitle>No results</AlertTitle>
+          <AlertDescription>
+            No flags match your search.
+          </AlertDescription>
         </Alert>
       ) : listIsEmpty && isListPending ? (
         <div
@@ -273,14 +275,14 @@ export default function FlagsPageClient({
           aria-label="Loading flags"
         >
           <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
-          <p className="text-sm text-muted-foreground">Updating flags…</p>
+          <p className="text-sm text-muted-foreground">Refreshing…</p>
         </div>
       ) : listIsEmpty ? (
         <Alert className="page-enter page-enter-delay-2 max-w-lg [&>svg]:text-muted-foreground">
           <Info aria-hidden />
           <AlertTitle>No flags yet</AlertTitle>
           <AlertDescription className="mt-2 block space-y-4">
-            <span className="block">Create a flag to see it here.</span>
+            <span className="block">Create a flag to see it listed here.</span>
             {isAdmin ? (
               <Button className="w-full sm:w-auto" onClick={() => setCreateOpen(true)}>
                 New flag
@@ -311,9 +313,7 @@ export default function FlagsPageClient({
                   scope="col"
                   className="data-table-th w-[1%] whitespace-normal text-center font-normal"
                 >
-                  <span className="sr-only">
-                    On or off in {primaryEnv.name}
-                  </span>
+                  <span className="sr-only">Enabled in {primaryEnv.name}</span>
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -359,10 +359,10 @@ export default function FlagsPageClient({
                             className="mt-2 text-[0.6875rem] tabular-nums tracking-wide text-muted-foreground"
                             title={`Enabled in ${enabledCount} of ${envTotal} environments`}
                           >
-                            <span className="font-medium text-foreground">
-                              {enabledCount}/{envTotal}
-                            </span>{" "}
-                            <span className="text-muted-foreground">environments on</span>
+                            <span className="font-medium text-foreground">{enabledCount}</span>
+                            <span className="text-muted-foreground">/</span>
+                            <span className="font-medium text-foreground">{envTotal}</span>
+                            <span className="ms-1 text-muted-foreground">enabled</span>
                           </p>
                         ) : null}
                       </Link>
