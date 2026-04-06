@@ -46,93 +46,95 @@ export default function CreateFlagForm({ onSubmit, onCancel }: Props) {
 
   return (
     <form
-      className="border rounded-lg p-6 space-y-4 bg-card"
+      className="flex flex-col gap-6"
       onSubmit={(e) => {
         e.preventDefault();
         e.stopPropagation();
         form.handleSubmit();
       }}
     >
-      <h2 className="font-semibold">Create Flag</h2>
-
-      {submitError && (
-        <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
+      {submitError ? (
+        <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {submitError}
         </p>
-      )}
+      ) : null}
 
-      <form.Field name="name">
-        {(field) => (
-          <div className="space-y-1.5">
-            <Label htmlFor="flag-name">Name</Label>
-            <Input
-              id="flag-name"
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(e) => {
-                const v = e.target.value;
-                field.handleChange(v);
-                if (!keyEdited) {
-                  form.setFieldValue('key', slugify(v));
-                }
-              }}
-              required
-              autoFocus
-              placeholder="My New Feature"
-            />
-          </div>
-        )}
-      </form.Field>
-
-      <form.Field name="key">
-        {(field) => (
-          <div className="space-y-1.5">
-            <Label htmlFor="flag-key">Key</Label>
-            <Input
-              id="flag-key"
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(e) => {
-                const v = e.target.value;
-                field.handleChange(v);
-                setKeyEdited(v !== slugify(form.getFieldValue('name')));
-              }}
-              required
-              placeholder="my-new-feature"
-              className="font-mono"
-            />
-            <p className="text-xs text-muted-foreground">Auto-generated from name. Immutable after creation.</p>
-          </div>
-        )}
-      </form.Field>
-
-      <form.Field name="description">
-        {(field) => (
-          <div className="space-y-1.5">
-            <Label htmlFor="flag-description">Description</Label>
-            <Textarea
-              id="flag-description"
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(e) => field.handleChange(e.target.value)}
-              rows={2}
-              placeholder="What does this flag control?"
-            />
-          </div>
-        )}
-      </form.Field>
-
-      <div className="flex gap-3">
-        <form.Subscribe selector={(s) => s.isSubmitting}>
-          {(isSubmitting) => (
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Creating…' : 'Create Flag'}
-            </Button>
+      <div className="space-y-5">
+        <form.Field name="name">
+          {(field) => (
+            <div className="space-y-1.5">
+              <Label htmlFor="flag-name">Name</Label>
+              <Input
+                id="flag-name"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  field.handleChange(v);
+                  if (!keyEdited) {
+                    form.setFieldValue('key', slugify(v));
+                  }
+                }}
+                required
+                autoFocus
+                placeholder="My New Feature"
+              />
+            </div>
           )}
-        </form.Subscribe>
+        </form.Field>
+
+        <form.Field name="key">
+          {(field) => (
+            <div className="space-y-1.5">
+              <Label htmlFor="flag-key">Key</Label>
+              <Input
+                id="flag-key"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  field.handleChange(v);
+                  setKeyEdited(v !== slugify(form.getFieldValue('name')));
+                }}
+                required
+                placeholder="my-new-feature"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Auto-generated from name. Immutable after creation.
+              </p>
+            </div>
+          )}
+        </form.Field>
+
+        <form.Field name="description">
+          {(field) => (
+            <div className="space-y-1.5">
+              <Label htmlFor="flag-description">Description</Label>
+              <Textarea
+                id="flag-description"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(e) => field.handleChange(e.target.value)}
+                rows={3}
+                placeholder="What does this flag control?"
+              />
+            </div>
+          )}
+        </form.Field>
+      </div>
+
+      <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:justify-end sm:gap-3">
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
+        <form.Subscribe selector={(s) => s.isSubmitting}>
+          {(isSubmitting) => (
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creating…' : 'Create flag'}
+            </Button>
+          )}
+        </form.Subscribe>
       </div>
     </form>
   );
