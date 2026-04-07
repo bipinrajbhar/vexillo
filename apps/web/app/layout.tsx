@@ -5,6 +5,7 @@ import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { ThemeProvider } from "@/components/theme-provider";
 import { getServerSession } from "@/lib/session";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 export const metadata: Metadata = {
   title: "Vexillo",
@@ -37,6 +38,7 @@ export default async function RootLayout({
         <ThemeProvider>
           <AppShell session={shellSession}>{children}</AppShell>
         </ThemeProvider>
+        <SpeedInsights />
       </body>
     </html>
   );
