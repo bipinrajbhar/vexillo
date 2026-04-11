@@ -47,7 +47,7 @@ const indexRoute = createRoute({
       throw redirect({ to: '/admin' })
     }
     const res = await fetch('/api/dashboard/me/orgs')
-    if (res.ok) {
+    if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
       const { orgs } = await res.json() as { orgs: { slug: string }[] }
       if (orgs.length === 1) {
         throw redirect({ to: `/org/${orgs[0].slug}/flags` })
