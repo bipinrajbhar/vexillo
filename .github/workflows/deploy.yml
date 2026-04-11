@@ -26,7 +26,6 @@ jobs:
               - 'packages/db/**'
             web:
               - 'apps/web/**'
-              - 'packages/**'
 
   # ── Deploy API ────────────────────────────────────────────────────────────
   deploy-api:

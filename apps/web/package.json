@@ -17,7 +17,7 @@
     "@vexillo/db": "workspace:*",
     "@tanstack/react-form": "^1.28.6",
     "@vercel/speed-insights": "^2.0.0",
-    "@vexillo/react-sdk": "workspace:*",
+    "@vexillo/react-sdk": "^3.0.0",
     "better-auth": "^1.5.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
