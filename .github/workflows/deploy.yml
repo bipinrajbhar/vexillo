@@ -62,44 +62,27 @@ jobs:
           docker push "$REGISTRY/$REPOSITORY:latest"
           echo "image=$REGISTRY/$REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
-      # ── Step 3: Trigger App Runner deployment and wait for healthy ───────────
-      # autoDeploymentsEnabled is false in the CDK stack so we trigger manually.
-      - name: Deploy to App Runner
-        id: apprunner-deploy
+      # ── Step 3: Deploy new image to ECS Fargate and wait for stable ─────────
+      - name: Deploy to ECS
         env:
-          SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER_NAME }}
+          ECS_SERVICE: ${{ secrets.ECS_SERVICE_NAME }}
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          OPERATION_ID=$(aws apprunner start-deployment \
-            --service-arn "$SERVICE_ARN" \
-            --query 'OperationId' \
-            --output text)
-          echo "App Runner deployment triggered: $OPERATION_ID"
+          # Update the ECS service to use the new image
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --output text
 
-      - name: Wait for App Runner service to be running
-        env:
-          SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
-        run: |
-          echo "Waiting for App Runner service to reach RUNNING status..."
-          for i in $(seq 1 30); do
-            STATUS=$(aws apprunner describe-service \
-              --service-arn "$SERVICE_ARN" \
-              --query 'Service.Status' \
-              --output text)
-            echo "  attempt $i/30 — status: $STATUS"
-            if [ "$STATUS" = "RUNNING" ]; then
-              echo "App Runner service is RUNNING."
-              exit 0
-            fi
-            if [ "$STATUS" = "OPERATION_IN_PROGRESS" ]; then
-              sleep 15
-              continue
-            fi
-            # Any other status (CREATE_FAILED, DELETE_FAILED, etc.) is fatal.
-            echo "Unexpected App Runner status: $STATUS — aborting."
-            exit 1
-          done
-          echo "Timed out waiting for App Runner service to become RUNNING."
-          exit 1
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+          echo "ECS service is stable."
 
       # ── Step 4: Build Vite SPA ───────────────────────────────────────────────
       - name: Build web app

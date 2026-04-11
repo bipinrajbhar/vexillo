@@ -7,7 +7,9 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
-import * as apprunner from 'aws-cdk-lib/aws-apprunner';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 /**
@@ -15,9 +17,9 @@ import { Construct } from 'constructs';
  *
  * Architecture:
  *   CloudFront → S3 (default, Vite SPA)
- *              → App Runner (  /api/*, 30s cache on /api/sdk/flags)
- *   App Runner → RDS Postgres (via VPC connector, private subnet)
- *   ECR        ← CI/CD (docker push + apprunner start-deployment)
+ *              → ALB → ECS Fargate (  /api/*, 30s cache on /api/sdk/flags)
+ *   ECS Fargate → RDS Postgres (via VPC, private subnet)
+ *   ECR        ← CI/CD (docker push + ecs update-service)
  *   SSM        ← operator sets real secret values post-deploy
  */
 export class VexilloStack extends cdk.Stack {
@@ -43,23 +45,21 @@ export class VexilloStack extends cdk.Stack {
     });
 
     // ── Security groups ───────────────────────────────────────────────────────
-    // App Runner VPC connector: egress only (traffic originates inside App Runner)
-    const vpcConnectorSg = new ec2.SecurityGroup(this, 'VpcConnectorSg', {
+    const apiSg = new ec2.SecurityGroup(this, 'ApiSg', {
       vpc,
-      description: 'App Runner VPC connector — outbound to RDS',
+      description: 'ECS Fargate API service',
       allowAllOutbound: true,
     });
 
-    // RDS: only accept Postgres connections from the VPC connector
     const rdsSg = new ec2.SecurityGroup(this, 'RdsSg', {
       vpc,
-      description: 'RDS Postgres — accept from App Runner VPC connector',
+      description: 'RDS Postgres - accept from ECS API',
       allowAllOutbound: false,
     });
     rdsSg.addIngressRule(
-      vpcConnectorSg,
+      apiSg,
       ec2.Port.tcp(5432),
-      'Allow Postgres from App Runner VPC connector',
+      'Allow Postgres from ECS API',
     );
 
     // ── RDS Postgres ─────────────────────────────────────────────────────────
@@ -80,7 +80,6 @@ export class VexilloStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [rdsSg],
       databaseName: 'vexillo',
-      // Single-AZ for cost; promote to Multi-AZ when going to production
       multiAz: false,
       storageEncrypted: true,
       deletionProtection: true,
@@ -94,7 +93,6 @@ export class VexilloStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       lifecycleRules: [
         {
-          // Keep last 10 tagged images to avoid unbounded growth
           maxImageCount: 10,
           tagStatus: ecr.TagStatus.ANY,
           description: 'Retain last 10 images',
@@ -102,24 +100,30 @@ export class VexilloStack extends cdk.Stack {
       ],
     });
 
-    // ── App Runner IAM roles ──────────────────────────────────────────────────
-    // Access role: used by App Runner SERVICE to pull the image from ECR
-    const appRunnerAccessRole = new iam.Role(this, 'AppRunnerAccessRole', {
-      roleName: 'vexillo-apprunner-access-role',
-      assumedBy: new iam.ServicePrincipal('build.apprunner.amazonaws.com'),
+    // ── ECS Cluster ───────────────────────────────────────────────────────────
+    const cluster = new ecs.Cluster(this, 'Cluster', {
+      vpc,
+      clusterName: 'vexillo',
+      containerInsights: true,
+    });
+
+    // ── Task execution role (pull image from ECR, write logs) ─────────────────
+    const executionRole = new iam.Role(this, 'TaskExecutionRole', {
+      roleName: 'vexillo-ecs-execution-role',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName(
-          'AmazonEC2ContainerRegistryReadOnly',
+          'service-role/AmazonECSTaskExecutionRolePolicy',
         ),
       ],
     });
 
-    // Instance role: assumed by the running CONTAINER for SSM access
-    const appRunnerInstanceRole = new iam.Role(this, 'AppRunnerInstanceRole', {
-      roleName: 'vexillo-apprunner-instance-role',
-      assumedBy: new iam.ServicePrincipal('tasks.apprunner.amazonaws.com'),
+    // ── Task role (runtime permissions: SSM, Secrets Manager) ────────────────
+    const taskRole = new iam.Role(this, 'TaskRole', {
+      roleName: 'vexillo-ecs-task-role',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
-    appRunnerInstanceRole.addToPolicy(
+    taskRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'ReadSsmParameters',
         actions: ['ssm:GetParameter', 'ssm:GetParameters', 'ssm:GetParametersByPath'],
@@ -128,59 +132,63 @@ export class VexilloStack extends cdk.Stack {
         ],
       }),
     );
-    // Allow reading the RDS credentials secret generated above
-    database.secret?.grantRead(appRunnerInstanceRole);
+    database.secret?.grantRead(taskRole);
 
-    // ── App Runner VPC connector ──────────────────────────────────────────────
-    const vpcConnector = new apprunner.CfnVpcConnector(this, 'VpcConnector', {
-      vpcConnectorName: 'vexillo-connector',
-      subnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS })
-        .subnetIds,
-      securityGroups: [vpcConnectorSg.securityGroupId],
+    // ── CloudWatch log group ──────────────────────────────────────────────────
+    const logGroup = new logs.LogGroup(this, 'ApiLogGroup', {
+      logGroupName: '/vexillo/api',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // ── App Runner service ────────────────────────────────────────────────────
-    // Placeholder public image for the initial CDK deploy.
-    // The CI/CD pipeline (deploy.yml) will push to ECR and call
-    // `aws apprunner start-deployment` to switch to the real image.
-    const appRunnerService = new apprunner.CfnService(this, 'ApiService', {
-      serviceName: 'vexillo-api',
-      sourceConfiguration: {
-        autoDeploymentsEnabled: false,
-        imageRepository: {
-          // Amazon's hello-app-runner image returns HTTP 200 on any path
-          imageIdentifier: 'public.ecr.aws/aws-containers/hello-app-runner:latest',
-          imageRepositoryType: 'ECR_PUBLIC',
-          imageConfiguration: {
-            port: '8080',
-            runtimeEnvironmentVariables: [
-              // The real DATABASE_URL is injected at runtime via SSM;
-              // this placeholder satisfies the CDK requirement for a value.
-              { name: 'DATABASE_URL', value: 'placeholder' },
-            ],
+    // ── ECS Fargate service + ALB (ECS Express Mode pattern) ─────────────────
+    // Uses a placeholder public image for initial deploy.
+    // CI/CD updates the service with the real ECR image via `ecs update-service`.
+    const apiService = new ecsPatterns.ApplicationLoadBalancedFargateService(
+      this,
+      'ApiService',
+      {
+        cluster,
+        serviceName: 'vexillo-api',
+        cpu: 256,
+        memoryLimitMiB: 512,
+        desiredCount: 1,
+        securityGroups: [apiSg],
+        taskSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        publicLoadBalancer: true,
+        assignPublicIp: false,
+        taskImageOptions: {
+          // Placeholder image — CI/CD will replace with real ECR image
+          image: ecs.ContainerImage.fromRegistry(
+            'public.ecr.aws/aws-containers/hello-app-runner:latest',
+          ),
+          containerPort: 8080,
+          executionRole,
+          taskRole,
+          logDriver: ecs.LogDrivers.awsLogs({
+            logGroup,
+            streamPrefix: 'api',
+          }),
+          environment: {
+            DATABASE_URL: 'placeholder',
           },
         },
-      },
-      instanceConfiguration: {
-        instanceRoleArn: appRunnerInstanceRole.roleArn,
-        cpu: '0.25 vCPU',
-        memory: '0.5 GB',
-      },
-      networkConfiguration: {
-        egressConfiguration: {
-          egressType: 'VPC',
-          vpcConnectorArn: vpcConnector.attrVpcConnectorArn,
+        healthCheck: {
+          command: ['CMD-SHELL', 'curl -f http://localhost:8080/health || exit 1'],
+          interval: cdk.Duration.seconds(10),
+          timeout: cdk.Duration.seconds(5),
+          healthyThresholdCount: 1,
+          unhealthyThresholdCount: 5,
         },
       },
-      healthCheckConfiguration: {
-        protocol: 'HTTP',
-        path: '/health',
-        interval: 10,
-        timeout: 5,
-        healthyThreshold: 1,
-        unhealthyThreshold: 5,
-      },
-    });
+    );
+
+    // Allow ALB to reach the ECS tasks on port 8080
+    apiService.service.connections.allowFrom(
+      apiService.loadBalancer,
+      ec2.Port.tcp(8080),
+      'ALB to ECS',
+    );
 
     // ── S3 bucket (web frontend) ──────────────────────────────────────────────
     const webBucket = new s3.Bucket(this, 'WebBucket', {
@@ -190,10 +198,7 @@ export class VexilloStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // OAC is created automatically by S3BucketOrigin.withOriginAccessControl() below.
-
     // ── CloudFront cache policies ─────────────────────────────────────────────
-    // SDK flags: 30s default TTL, 60s max, key on Authorization header
     const sdkFlagsCachePolicy = new cloudfront.CachePolicy(
       this,
       'SdkFlagsCachePolicy',
@@ -202,15 +207,12 @@ export class VexilloStack extends cdk.Stack {
         defaultTtl: cdk.Duration.seconds(30),
         maxTtl: cdk.Duration.seconds(60),
         minTtl: cdk.Duration.seconds(0),
-        headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
-          'Authorization',
-        ),
+        headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization'),
         queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
         cookieBehavior: cloudfront.CacheCookieBehavior.none(),
       },
     );
 
-    // API (no cache): pass everything, no caching
     const apiCachePolicy = new cloudfront.CachePolicy(this, 'ApiCachePolicy', {
       cachePolicyName: 'vexillo-api-no-cache',
       defaultTtl: cdk.Duration.seconds(0),
@@ -221,7 +223,7 @@ export class VexilloStack extends cdk.Stack {
       cookieBehavior: cloudfront.CacheCookieBehavior.all(),
     });
 
-    // ── CloudFront origin request policy for API (forward all) ────────────────
+    // ── CloudFront origin request policy for API ──────────────────────────────
     const apiOriginRequestPolicy = new cloudfront.OriginRequestPolicy(
       this,
       'ApiOriginRequestPolicy',
@@ -233,30 +235,21 @@ export class VexilloStack extends cdk.Stack {
       },
     );
 
-    // ── App Runner origin (HTTPS only) ────────────────────────────────────────
-    const appRunnerOrigin = new origins.HttpOrigin(
-      cdk.Fn.select(
-        2,
-        cdk.Fn.split('/', appRunnerService.attrServiceUrl),
-      ),
-      {
-        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-        httpsPort: 443,
-        readTimeout: cdk.Duration.seconds(60),
-        keepaliveTimeout: cdk.Duration.seconds(60),
-      },
-    );
+    // ── ALB origin ────────────────────────────────────────────────────────────
+    const albOrigin = new origins.LoadBalancerV2Origin(apiService.loadBalancer, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+      httpPort: 80,
+      readTimeout: cdk.Duration.seconds(60),
+      keepaliveTimeout: cdk.Duration.seconds(60),
+    });
 
-    // ── S3 origin — OAC wired natively by S3BucketOrigin ─────────────────────
-    // withOriginAccessControl() creates the OAC resource and adds the bucket
-    // policy granting CloudFront s3:GetObject access automatically.
+    // ── S3 origin ─────────────────────────────────────────────────────────────
     const s3Origin = origins.S3BucketOrigin.withOriginAccessControl(webBucket);
 
     // ── CloudFront distribution ───────────────────────────────────────────────
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
-      comment: 'Vexillo — SPA + API',
+      comment: 'Vexillo - SPA + API',
       defaultRootObject: 'index.html',
-      // Default behavior: S3 SPA
       defaultBehavior: {
         origin: s3Origin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -265,18 +258,16 @@ export class VexilloStack extends cdk.Stack {
         compress: true,
       },
       additionalBehaviors: {
-        // SDK flags endpoint — 30s CDN cache, keyed on Authorization header
         '/api/sdk/flags': {
-          origin: appRunnerOrigin,
+          origin: albOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: sdkFlagsCachePolicy,
           originRequestPolicy: apiOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
           compress: false,
         },
-        // All other API routes — no cache, forward everything
         '/api/*': {
-          origin: appRunnerOrigin,
+          origin: albOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: apiCachePolicy,
           originRequestPolicy: apiOriginRequestPolicy,
@@ -284,7 +275,6 @@ export class VexilloStack extends cdk.Stack {
           compress: false,
         },
       },
-      // SPA routing: map S3 403/404 → index.html so TanStack Router can handle the path
       errorResponses: [
         {
           httpStatus: 403,
@@ -303,8 +293,6 @@ export class VexilloStack extends cdk.Stack {
     });
 
     // ── SSM Parameter Store — secret placeholders ─────────────────────────────
-    // Operators must update these values before the API can start correctly.
-    // The App Runner container reads them at startup via SSM SDK calls.
     const ssmParams: Record<string, string> = {
       '/vexillo/DATABASE_URL': 'REPLACE_ME',
       '/vexillo/BETTER_AUTH_SECRET': 'REPLACE_ME',
@@ -320,52 +308,56 @@ export class VexilloStack extends cdk.Stack {
       new ssm.StringParameter(this, `Param${id}`, {
         parameterName: name,
         stringValue: value,
-        description: `Vexillo runtime secret — update before first deploy`,
+        description: 'Vexillo runtime secret - update before first deploy',
         tier: ssm.ParameterTier.STANDARD,
       });
     }
 
     // ── Stack outputs ─────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
-      description: 'CloudFront distribution URL — use as BETTER_AUTH_URL',
+      description: 'CloudFront distribution URL - use as BETTER_AUTH_URL',
       value: `https://${distribution.distributionDomainName}`,
       exportName: 'VexilloCloudFrontUrl',
     });
 
-    new cdk.CfnOutput(this, 'AppRunnerServiceUrl', {
-      description: 'App Runner service URL (direct, bypasses CloudFront)',
-      value: appRunnerService.attrServiceUrl,
-      exportName: 'VexilloAppRunnerServiceUrl',
+    new cdk.CfnOutput(this, 'AlbDnsName', {
+      description: 'ALB DNS name (direct, bypasses CloudFront)',
+      value: apiService.loadBalancer.loadBalancerDnsName,
+      exportName: 'VexilloAlbDnsName',
     });
 
-    new cdk.CfnOutput(this, 'AppRunnerServiceArn', {
-      description:
-        'App Runner service ARN — set as APP_RUNNER_SERVICE_ARN GitHub secret',
-      value: appRunnerService.attrServiceArn,
-      exportName: 'VexilloAppRunnerServiceArn',
+    new cdk.CfnOutput(this, 'EcsClusterName', {
+      description: 'ECS cluster name - use in CI/CD',
+      value: cluster.clusterName,
+      exportName: 'VexilloEcsClusterName',
+    });
+
+    new cdk.CfnOutput(this, 'EcsServiceName', {
+      description: 'ECS service name - use in CI/CD',
+      value: apiService.service.serviceName,
+      exportName: 'VexilloEcsServiceName',
     });
 
     new cdk.CfnOutput(this, 'EcrRepositoryUri', {
-      description: 'ECR repository URI — set as ECR_REPOSITORY GitHub secret',
+      description: 'ECR repository URI - set as ECR_REPOSITORY GitHub secret',
       value: repository.repositoryUri,
       exportName: 'VexilloEcrRepositoryUri',
     });
 
     new cdk.CfnOutput(this, 'WebBucketName', {
-      description: 'S3 bucket name — set as S3_BUCKET_NAME GitHub secret',
+      description: 'S3 bucket name - set as S3_BUCKET_NAME GitHub secret',
       value: webBucket.bucketName,
       exportName: 'VexilloWebBucketName',
     });
 
     new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
-      description:
-        'CloudFront distribution ID — set as CLOUDFRONT_DISTRIBUTION_ID GitHub secret',
+      description: 'CloudFront distribution ID - set as CLOUDFRONT_DISTRIBUTION_ID GitHub secret',
       value: distribution.distributionId,
       exportName: 'VexilloCloudFrontDistributionId',
     });
 
     new cdk.CfnOutput(this, 'RdsEndpoint', {
-      description: 'RDS Postgres endpoint — use to build DATABASE_URL',
+      description: 'RDS Postgres endpoint - use to build DATABASE_URL',
       value: database.dbInstanceEndpointAddress,
       exportName: 'VexilloRdsEndpoint',
     });
