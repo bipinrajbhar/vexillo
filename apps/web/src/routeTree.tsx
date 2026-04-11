@@ -3,6 +3,7 @@ import { RootLayout } from './routes/__root'
 import { SignInPage } from './routes/sign-in'
 import { AuthLayout } from './routes/_auth'
 import { HomePage } from './routes/_auth/index'
+import { FlagDetailPage } from './routes/_auth/flags.$key'
 import { EnvironmentsPage } from './routes/_auth/environments'
 import { MembersPage } from './routes/_auth/members'
 import { authClient } from '@/lib/auth-client'
@@ -42,6 +43,13 @@ const indexRoute = createRoute({
   component: HomePage,
 })
 
+// Protected: /flags/:key — flag detail
+const flagDetailRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/flags/$key',
+  component: FlagDetailPage,
+})
+
 // Protected: /environments (placeholder, filled in Phase 7)
 const environmentsRoute = createRoute({
   getParentRoute: () => authRoute,
@@ -58,5 +66,5 @@ const membersRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   signInRoute,
-  authRoute.addChildren([indexRoute, environmentsRoute, membersRoute]),
+  authRoute.addChildren([indexRoute, flagDetailRoute, environmentsRoute, membersRoute]),
 ])
