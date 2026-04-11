@@ -3,6 +3,9 @@ import { secureHeaders } from 'hono/secure-headers';
 import { createDbClient } from '@vexillo/db';
 import { createSdkRouter } from './routes/sdk';
 import { createDashboardRouter } from './routes/dashboard';
+import { createSuperAdminRouter } from './routes/superadmin';
+import { createInvitesRouter } from './routes/invites';
+import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createAuth } from './lib/auth';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -42,6 +45,9 @@ app.use(
 // Health check — used by App Runner and CloudFront origin health checks
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
+// Per-org Okta OAuth — must be before the BetterAuth catch-all
+app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
+
 // Auth routes — BetterAuth handles /api/auth/* (Okta OAuth, session)
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
@@ -52,6 +58,18 @@ app.route('/api/sdk', createSdkRouter(db));
 app.route(
   '/api/dashboard',
   createDashboardRouter(db, (headers) => auth.api.getSession({ headers })),
+);
+
+// Super-admin routes — isSuperAdmin required
+app.route(
+  '/api/superadmin',
+  createSuperAdminRouter(db, (headers) => auth.api.getSession({ headers })),
+);
+
+// Invite accept route — public-ish (requires authenticated session, not org membership)
+app.route(
+  '/api/invites',
+  createInvitesRouter(db, (headers) => auth.api.getSession({ headers })),
 );
 
 const port = Number(process.env.PORT ?? 3000);

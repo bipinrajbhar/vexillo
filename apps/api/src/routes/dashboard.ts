@@ -1,27 +1,43 @@
 import { Hono } from 'hono';
-import { eq, and, asc, desc, sql } from 'drizzle-orm';
+import { eq, and, asc, desc, sql, isNull, gt } from 'drizzle-orm';
 import {
   authUser,
   environments,
   flags,
   flagStates,
   apiKeys,
+  organizations,
+  organizationMembers,
+  invites,
 } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
 
-// Minimal session shape needed by dashboard routes.
-// role is string | null | undefined because BetterAuth additionalFields can be absent.
+// Generate a random invite token (32 hex bytes = 64-char hex string)
+function generateInviteToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export type Session = {
   user: {
     id: string;
     name: string;
     email: string;
-    role: string | null | undefined;
+    isSuperAdmin?: boolean | null;
   };
 };
 
 export type GetSession = (headers: Headers) => Promise<Session | null>;
+
+type OrgRow = typeof organizations.$inferSelect;
+
+type Variables = {
+  session: Session;
+  org: OrgRow;
+  userRole: string;
+};
 
 function slugify(name: string): string {
   return name
@@ -30,8 +46,6 @@ function slugify(name: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
-
-type Variables = { session: Session };
 
 export function createDashboardRouter(db: DbClient, getSession: GetSession) {
   const router = new Hono<{ Variables: Variables }>();
@@ -44,10 +58,72 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     await next();
   });
 
-  // ── Flags ────────────────────────────────────────────────────────────────
+  // GET /api/dashboard/me/orgs — list orgs the current user is a member of
+  router.get('/me/orgs', async (c) => {
+    const session = c.get('session');
+    const rows = await db
+      .select({ id: organizations.id, name: organizations.name, slug: organizations.slug })
+      .from(organizationMembers)
+      .innerJoin(organizations, eq(organizations.id, organizationMembers.orgId))
+      .where(
+        and(
+          eq(organizationMembers.userId, session.user.id),
+          eq(organizations.status, 'active'),
+        ),
+      );
+    return c.json({ orgs: rows });
+  });
 
-  // GET /api/dashboard/flags — list all flags with per-environment states
-  router.get('/flags', async (c) => {
+  // Org context middleware — resolves org from slug, verifies membership
+  router.use('/:orgSlug/*', async (c, next) => {
+    const session = c.get('session');
+    const orgSlug = c.req.param('orgSlug');
+
+    const [org] = await db
+      .select()
+      .from(organizations)
+      .where(eq(organizations.slug, orgSlug))
+      .limit(1);
+
+    if (!org) return c.json({ error: 'Organization not found' }, 404);
+    if (org.status === 'suspended') return c.json({ error: 'Organization suspended' }, 403);
+
+    const [membership] = await db
+      .select({ role: organizationMembers.role })
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.orgId, org.id),
+          eq(organizationMembers.userId, session.user.id),
+        ),
+      )
+      .limit(1);
+
+    if (!membership) return c.json({ error: 'Not a member of this organization' }, 403);
+
+    c.set('org', org);
+    c.set('userRole', membership.role);
+    await next();
+  });
+
+  // ── Org context ──────────────────────────────────────────────────────────────
+
+  // GET /api/dashboard/:orgSlug/context — org info + user role for web layout loader
+  router.get('/:orgSlug/context', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    return c.json({
+      org: { id: org.id, name: org.name, slug: org.slug },
+      role: userRole,
+    });
+  });
+
+  // ── Flags ────────────────────────────────────────────────────────────────────
+
+  // GET /api/dashboard/:orgSlug/flags — list all flags with per-environment states
+  router.get('/:orgSlug/flags', async (c) => {
+    const org = c.get('org');
+
     const [rows, envRows] = await Promise.all([
       db
         .select({
@@ -68,11 +144,13 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
             eq(flagStates.environmentId, environments.id),
           ),
         )
+        .where(and(eq(flags.orgId, org.id), eq(environments.orgId, org.id)))
         .orderBy(desc(flags.createdAt), asc(environments.name)),
 
       db
         .select({ id: environments.id, name: environments.name, slug: environments.slug })
         .from(environments)
+        .where(eq(environments.orgId, org.id))
         .orderBy(asc(environments.name)),
     ]);
 
@@ -98,10 +176,11 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     return c.json({ flags: Array.from(flagMap.values()), environments: envRows });
   });
 
-  // POST /api/dashboard/flags — create flag (admin only)
-  router.post('/flags', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // POST /api/dashboard/:orgSlug/flags — create flag (admin only)
+  router.post('/:orgSlug/flags', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const body = await c.req.json();
     const name: string = body.name?.trim() ?? '';
@@ -112,18 +191,24 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     if (!key) return c.json({ error: 'Invalid key' }, 400);
 
     try {
-      const envs = await db.select({ id: environments.id }).from(environments);
+      const envs = await db
+        .select({ id: environments.id })
+        .from(environments)
+        .where(eq(environments.orgId, org.id));
+
       if (envs.length === 0) {
         return c.json({ error: 'Create an environment before creating flags' }, 400);
       }
 
-      const [flag] = await db.insert(flags).values({ name, key, description }).returning();
-      if (envs.length > 0) {
-        await db
-          .insert(flagStates)
-          .values(envs.map((env) => ({ flagId: flag.id, environmentId: env.id, enabled: false })))
-          .onConflictDoNothing();
-      }
+      const [flag] = await db
+        .insert(flags)
+        .values({ orgId: org.id, name, key, description })
+        .returning();
+
+      await db
+        .insert(flagStates)
+        .values(envs.map((env) => ({ flagId: flag.id, environmentId: env.id, enabled: false })))
+        .onConflictDoNothing();
 
       return c.json({ flag }, 201);
     } catch (err: unknown) {
@@ -135,10 +220,11 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     }
   });
 
-  // PATCH /api/dashboard/flags/:key — update flag name/description (admin only)
-  router.patch('/flags/:key', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // PATCH /api/dashboard/:orgSlug/flags/:key — update flag name/description (admin only)
+  router.patch('/:orgSlug/flags/:key', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const key = c.req.param('key');
     const body = await c.req.json();
@@ -157,23 +243,47 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
       return c.json({ error: 'No fields to update' }, 400);
     }
 
-    const result = await db.update(flags).set(updates).where(eq(flags.key, key)).returning();
+    const result = await db
+      .update(flags)
+      .set(updates)
+      .where(and(eq(flags.key, key), eq(flags.orgId, org.id)))
+      .returning();
 
     if (result.length === 0) return c.json({ error: 'Flag not found' }, 404);
     return c.json({ flag: result[0] });
   });
 
-  // POST /api/dashboard/flags/:key/toggle — toggle flag per environment (admin only)
-  router.post('/flags/:key/toggle', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // DELETE /api/dashboard/:orgSlug/flags/:key — delete flag and all its states (admin only)
+  router.delete('/:orgSlug/flags/:key', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const key = c.req.param('key');
+    const result = await db
+      .delete(flags)
+      .where(and(eq(flags.key, key), eq(flags.orgId, org.id)))
+      .returning({ id: flags.id });
+
+    if (result.length === 0) return c.json({ error: 'Flag not found' }, 404);
+    return c.body(null, 204);
+  });
+
+  // POST /api/dashboard/:orgSlug/flags/:key/toggle — toggle flag per environment (admin only)
+  router.post('/:orgSlug/flags/:key/toggle', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const key = c.req.param('key');
     const { environmentId } = await c.req.json();
-
     if (!environmentId) return c.json({ error: 'environmentId is required' }, 400);
 
-    const [flag] = await db.select({ id: flags.id }).from(flags).where(eq(flags.key, key));
+    const [flag] = await db
+      .select({ id: flags.id })
+      .from(flags)
+      .where(and(eq(flags.key, key), eq(flags.orgId, org.id)));
+
     if (!flag) return c.json({ error: 'Flag not found' }, 404);
 
     const [state] = await db
@@ -188,10 +298,12 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     return c.json({ enabled: state.enabled });
   });
 
-  // ── Environments ─────────────────────────────────────────────────────────
+  // ── Environments ─────────────────────────────────────────────────────────────
 
-  // GET /api/dashboard/environments — list environments with API key hints
-  router.get('/environments', async (c) => {
+  // GET /api/dashboard/:orgSlug/environments — list environments with API key hints
+  router.get('/:orgSlug/environments', async (c) => {
+    const org = c.get('org');
+
     const envRows = await db
       .select({
         id: environments.id,
@@ -203,19 +315,20 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
       })
       .from(environments)
       .leftJoin(apiKeys, eq(apiKeys.environmentId, environments.id))
+      .where(eq(environments.orgId, org.id))
       .orderBy(asc(environments.name));
 
     return c.json({ environments: envRows });
   });
 
-  // POST /api/dashboard/environments — create environment (admin only)
-  router.post('/environments', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // POST /api/dashboard/:orgSlug/environments — create environment (admin only)
+  router.post('/:orgSlug/environments', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const body = await c.req.json();
     const name: string = body.name?.trim() ?? '';
-
     if (!name) return c.json({ error: 'Name is required' }, 400);
 
     const slug = slugify(name);
@@ -228,7 +341,7 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     let env: typeof environments.$inferSelect;
 
     try {
-      [env] = await db.insert(environments).values({ name, slug }).returning();
+      [env] = await db.insert(environments).values({ orgId: org.id, name, slug }).returning();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '';
       if (msg.includes('unique') || msg.includes('duplicate')) {
@@ -240,7 +353,11 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     try {
       await db.insert(apiKeys).values({ environmentId: env.id, keyHash, keyHint });
 
-      const existingFlags = await db.select({ id: flags.id }).from(flags);
+      const existingFlags = await db
+        .select({ id: flags.id })
+        .from(flags)
+        .where(eq(flags.orgId, org.id));
+
       if (existingFlags.length > 0) {
         await db
           .insert(flagStates)
@@ -256,10 +373,11 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     return c.json({ environment: env, apiKey: rawKey }, 201);
   });
 
-  // PATCH /api/dashboard/environments/:id — update allowedOrigins (admin only)
-  router.patch('/environments/:id', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // PATCH /api/dashboard/:orgSlug/environments/:id — update allowedOrigins (admin only)
+  router.patch('/:orgSlug/environments/:id', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -274,40 +392,40 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     const result = await db
       .update(environments)
       .set({ allowedOrigins: body.allowedOrigins })
-      .where(eq(environments.id, id))
+      .where(and(eq(environments.id, id), eq(environments.orgId, org.id)))
       .returning({ id: environments.id, allowedOrigins: environments.allowedOrigins });
 
     if (result.length === 0) return c.json({ error: 'Environment not found' }, 404);
     return c.json({ environment: result[0] });
   });
 
-  // DELETE /api/dashboard/environments/:id — delete environment (admin only)
-  router.delete('/environments/:id', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // DELETE /api/dashboard/:orgSlug/environments/:id — delete environment (admin only)
+  router.delete('/:orgSlug/environments/:id', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const id = c.req.param('id');
-
     const result = await db
       .delete(environments)
-      .where(eq(environments.id, id))
+      .where(and(eq(environments.id, id), eq(environments.orgId, org.id)))
       .returning({ id: environments.id });
 
     if (result.length === 0) return c.json({ error: 'Environment not found' }, 404);
     return c.body(null, 204);
   });
 
-  // POST /api/dashboard/environments/:id/rotate-key — rotate API key (admin only)
-  router.post('/environments/:id/rotate-key', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // POST /api/dashboard/:orgSlug/environments/:id/rotate-key — rotate API key (admin only)
+  router.post('/:orgSlug/environments/:id/rotate-key', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const id = c.req.param('id');
-
     const [env] = await db
       .select({ id: environments.id })
       .from(environments)
-      .where(eq(environments.id, id));
+      .where(and(eq(environments.id, id), eq(environments.orgId, org.id)));
 
     if (!env) return c.json({ error: 'Environment not found' }, 404);
 
@@ -321,33 +439,37 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     return c.json({ apiKey: rawKey });
   });
 
-  // ── Members ──────────────────────────────────────────────────────────────
+  // ── Members ──────────────────────────────────────────────────────────────────
 
-  // GET /api/dashboard/members — list all members (admin only)
-  router.get('/members', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // GET /api/dashboard/:orgSlug/members — list org members (admin only)
+  router.get('/:orgSlug/members', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
     const members = await db
       .select({
         id: authUser.id,
         name: authUser.name,
         email: authUser.email,
-        role: authUser.role,
-        createdAt: authUser.createdAt,
+        role: organizationMembers.role,
+        createdAt: organizationMembers.createdAt,
       })
-      .from(authUser)
-      .orderBy(asc(authUser.createdAt));
+      .from(organizationMembers)
+      .innerJoin(authUser, eq(authUser.id, organizationMembers.userId))
+      .where(eq(organizationMembers.orgId, org.id))
+      .orderBy(asc(organizationMembers.createdAt));
 
     return c.json({ members });
   });
 
-  // PATCH /api/dashboard/members/:id — change member role (admin only)
-  router.patch('/members/:id', async (c) => {
-    const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  // PATCH /api/dashboard/:orgSlug/members/:userId — change org member role (admin only)
+  router.patch('/:orgSlug/members/:userId', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
-    const id = c.req.param('id');
+    const userId = c.req.param('userId');
     const body = await c.req.json();
     const role: string = body.role;
 
@@ -355,29 +477,192 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
       return c.json({ error: 'Role must be admin or viewer' }, 400);
     }
 
+    if (role === 'viewer') {
+      const admins = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.orgId, org.id),
+            eq(organizationMembers.role, 'admin'),
+          ),
+        );
+      const otherAdmins = admins.filter((a) => a.userId !== userId);
+      if (otherAdmins.length === 0) {
+        return c.json({ error: 'Cannot demote the last admin' }, 409);
+      }
+    }
+
     const result = await db
-      .update(authUser)
+      .update(organizationMembers)
       .set({ role })
-      .where(eq(authUser.id, id))
-      .returning({ id: authUser.id, role: authUser.role });
+      .where(
+        and(
+          eq(organizationMembers.orgId, org.id),
+          eq(organizationMembers.userId, userId),
+        ),
+      )
+      .returning({ userId: organizationMembers.userId, role: organizationMembers.role });
 
     if (result.length === 0) return c.json({ error: 'Member not found' }, 404);
     return c.json({ member: result[0] });
   });
 
-  // DELETE /api/dashboard/members/:id — remove member (admin only)
-  router.delete('/members/:id', async (c) => {
+  // DELETE /api/dashboard/:orgSlug/members/:userId — remove member from org (admin only)
+  router.delete('/:orgSlug/members/:userId', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const userId = c.req.param('userId');
+
+    const [membership] = await db
+      .select({ role: organizationMembers.role })
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.orgId, org.id),
+          eq(organizationMembers.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    if (!membership) return c.json({ error: 'Member not found' }, 404);
+
+    if (membership.role === 'admin') {
+      const admins = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.orgId, org.id),
+            eq(organizationMembers.role, 'admin'),
+          ),
+        );
+      if (admins.length <= 1) {
+        return c.json({ error: 'Cannot remove the last admin' }, 409);
+      }
+    }
+
+    await db
+      .delete(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.orgId, org.id),
+          eq(organizationMembers.userId, userId),
+        ),
+      );
+
+    return c.body(null, 204);
+  });
+
+  // ── Invites ───────────────────────────────────────────────────────────────────
+
+  // POST /api/dashboard/:orgSlug/invites — create invite (admin only)
+  router.post('/:orgSlug/invites', async (c) => {
+    const org = c.get('org');
     const session = c.get('session');
-    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
 
-    const id = c.req.param('id');
+    const body = await c.req.json();
+    const email: string = body.email?.trim();
+    const role: string = body.role;
 
-    const result = await db
-      .delete(authUser)
-      .where(eq(authUser.id, id))
-      .returning({ id: authUser.id });
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ error: 'Valid email is required' }, 400);
+    }
+    if (role !== 'admin' && role !== 'viewer') {
+      return c.json({ error: 'Role must be admin or viewer' }, 400);
+    }
 
-    if (result.length === 0) return c.json({ error: 'Member not found' }, 404);
+    // Block if a Vexillo user already exists with this email (one-user-one-tenant invariant)
+    const [existingUser] = await db
+      .select({ id: authUser.id })
+      .from(authUser)
+      .where(eq(authUser.email, email))
+      .limit(1);
+    if (existingUser) return c.json({ error: 'User already has an account' }, 409);
+
+    // Invalidate any existing pending invite for this email in this org (resend flow)
+    await db
+      .delete(invites)
+      .where(
+        and(
+          eq(invites.orgId, org.id),
+          eq(invites.email, email),
+          isNull(invites.acceptedAt),
+          gt(invites.expiresAt, new Date()),
+        ),
+      );
+
+    const rawToken = generateInviteToken();
+    const tokenHash = await hashKey(rawToken);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+    const [invite] = await db
+      .insert(invites)
+      .values({
+        orgId: org.id,
+        invitedByUserId: session.user.id,
+        email,
+        tokenHash,
+        role,
+        expiresAt,
+      })
+      .returning({
+        id: invites.id,
+        email: invites.email,
+        role: invites.role,
+        expiresAt: invites.expiresAt,
+        createdAt: invites.createdAt,
+      });
+
+    return c.json({ invite: { ...invite, token: rawToken } }, 201);
+  });
+
+  // GET /api/dashboard/:orgSlug/invites — list pending invites (admin only)
+  router.get('/:orgSlug/invites', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const now = new Date();
+    const pending = await db
+      .select({
+        id: invites.id,
+        email: invites.email,
+        role: invites.role,
+        expiresAt: invites.expiresAt,
+        createdAt: invites.createdAt,
+      })
+      .from(invites)
+      .where(
+        and(
+          eq(invites.orgId, org.id),
+          isNull(invites.acceptedAt),
+          gt(invites.expiresAt, now),
+        ),
+      )
+      .orderBy(asc(invites.createdAt));
+
+    return c.json({ invites: pending });
+  });
+
+  // DELETE /api/dashboard/:orgSlug/invites/:id — revoke invite (admin only)
+  router.delete('/:orgSlug/invites/:id', async (c) => {
+    const org = c.get('org');
+    const userRole = c.get('userRole');
+    if (userRole !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const inviteId = c.req.param('id');
+
+    const [deleted] = await db
+      .delete(invites)
+      .where(and(eq(invites.id, inviteId), eq(invites.orgId, org.id)))
+      .returning({ id: invites.id });
+
+    if (!deleted) return c.json({ error: 'Invite not found' }, 404);
     return c.body(null, 204);
   });
 

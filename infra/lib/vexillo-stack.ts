@@ -86,7 +86,7 @@ export class VexilloStack extends cdk.Stack {
       multiAz: false,
       storageEncrypted: true,
       deletionProtection: false,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
       backupRetention: cdk.Duration.days(7),
     });
 
@@ -167,7 +167,7 @@ export class VexilloStack extends cdk.Stack {
 
     // ALB target group health check
     apiService.targetGroup.configureHealthCheck({
-      path: '/',
+      path: '/health',
       healthyHttpCodes: '200-399',
       interval: cdk.Duration.seconds(15),
       timeout: cdk.Duration.seconds(5),
@@ -214,6 +214,50 @@ export class VexilloStack extends cdk.Stack {
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
     });
 
+    // ── CloudFront Response Headers Policy (SPA only) ─────────────────────────
+    // Applied to the default (S3) behavior so every SPA page response gets
+    // security headers. The /api/* behaviors are excluded — Hono handles its
+    // own headers via secureHeaders() middleware.
+    //
+    // CSP notes:
+    //   - 'unsafe-inline' in style-src is required: Base UI (dialogs, popovers,
+    //     dropdowns) injects inline styles for dynamic positioning at runtime.
+    //   - connect-src 'self' covers all /api/* calls via the same CloudFront domain.
+    //   - No external font, script, or image origins — all assets are self-hosted.
+    const spaResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'SpaResponseHeaders', {
+      responseHeadersPolicyName: 'vexillo-spa-security-headers',
+      securityHeadersBehavior: {
+        contentTypeOptions: { override: true },
+        frameOptions: {
+          frameOption: cloudfront.HeadersFrameOption.DENY,
+          override: true,
+        },
+        referrerPolicy: {
+          referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+          override: true,
+        },
+        strictTransportSecurity: {
+          accessControlMaxAge: cdk.Duration.days(365),
+          includeSubdomains: true,
+          override: true,
+        },
+        contentSecurityPolicy: {
+          contentSecurityPolicy: [
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob:",
+            "connect-src 'self'",
+            "font-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "frame-ancestors 'none'",
+          ].join('; '),
+          override: true,
+        },
+      },
+    });
+
     // ── CloudFront distribution ───────────────────────────────────────────────
     const albOrigin = new origins.LoadBalancerV2Origin(apiService.loadBalancer, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
@@ -233,6 +277,7 @@ export class VexilloStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
         compress: true,
+        responseHeadersPolicy: spaResponseHeadersPolicy,
       },
       additionalBehaviors: {
         '/api/sdk/flags': {

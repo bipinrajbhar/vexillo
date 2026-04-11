@@ -87,8 +87,16 @@ jobs:
   # ── Deploy Web ────────────────────────────────────────────────────────────
   deploy-web:
     name: Build Web → Upload Web
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
+    # Always depend on deploy-api so that when both apps change in the same
+    # commit, the API (and its DB migrations) finish before the new SPA goes
+    # live. When only the web changed, deploy-api is skipped and this job
+    # still runs — the `skipped` result is explicitly allowed below.
+    needs: [changes, deploy-api]
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.web == 'true' &&
+      (needs.deploy-api.result == 'success' || needs.deploy-api.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read

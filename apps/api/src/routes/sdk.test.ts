@@ -3,7 +3,8 @@ import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { createSdkRouter } from './sdk';
 
-// Minimal mock DB that satisfies the shape used by createSdkRouter
+// Minimal mock DB that satisfies the shape used by createSdkRouter.
+// All queries return empty arrays — used for error-path tests.
 function makeMockDb(overrides: Record<string, unknown> = {}) {
   const base = {
     select: () => base,
@@ -11,9 +12,37 @@ function makeMockDb(overrides: Record<string, unknown> = {}) {
     where: () => base,
     limit: () => Promise.resolve([]),
     leftJoin: () => base,
+    innerJoin: () => base,
     orderBy: () => Promise.resolve([]),
   };
   return { ...base, ...overrides } as unknown as Parameters<typeof createSdkRouter>[0];
+}
+
+// Queue-based mock DB for the happy-path tests that drive through multiple
+// sequential DB queries. Results are consumed FIFO; `limit` and `orderBy`
+// are the terminal methods used by createSdkRouter.
+function makeSdkQueueDb(results: unknown[][]) {
+  const queue = [...results];
+
+  function consume(): unknown[] {
+    return (queue.shift() ?? []) as unknown[];
+  }
+
+  const chain: Record<string, unknown> = {};
+
+  // Thenable handles `await db.select()…` patterns with no explicit terminal.
+  chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+    Promise.resolve(consume()).then(resolve, reject);
+
+  for (const m of ['select', 'from', 'where', 'leftJoin', 'innerJoin']) {
+    chain[m] = () => chain;
+  }
+
+  for (const m of ['limit', 'orderBy']) {
+    chain[m] = () => Promise.resolve(consume());
+  }
+
+  return chain as unknown as Parameters<typeof createSdkRouter>[0];
 }
 
 function makeApp(db: Parameters<typeof createSdkRouter>[0]) {
@@ -77,6 +106,151 @@ describe('GET /api/sdk/flags', () => {
   it('returns CORS headers on 401', async () => {
     const app = makeApp(makeMockDb());
     const res = await app.fetch(new Request('http://localhost/api/sdk/flags'));
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('returns 403 when API key is valid but environment no longer exists', async () => {
+    // Queue: apiKey lookup returns a match, environment lookup returns empty.
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }], // apiKeys query
+      [],                            // environments+org query → 403
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('returns 403 when the organization is suspended', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],                                          // apiKeys query
+      [{ id: 'env-1', allowedOrigins: [], orgStatus: 'suspended' }],        // environments+org query
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('returns 200 with flag states, CORS *, and Cache-Control on a valid key (no Origin header)', async () => {
+    // No Origin header → server/script request → always allowed, CORS * returned.
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],                                    // apiKeys
+      [{ id: 'env-1', allowedOrigins: [] }],                           // environments
+      [{ key: 'feature-a', enabled: true }, { key: 'feature-b', enabled: false }], // flags
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('cache-control')).toBe('s-maxage=30, stale-while-revalidate=60');
+    const body = await res.json() as { flags: Array<{ key: string; enabled: boolean }> };
+    expect(body.flags).toEqual([
+      { key: 'feature-a', enabled: true },
+      { key: 'feature-b', enabled: false },
+    ]);
+  });
+
+  it('returns an empty flags array when no flags exist', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: [] }],
+      [], // no flags
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flags: unknown[] };
+    expect(body.flags).toEqual([]);
+  });
+
+  // ── CORS allowlist enforcement ──────────────────────────────────────────────
+
+  it('returns 403 when Origin is present but allowedOrigins is empty', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: [] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          Origin: 'https://example.com',
+        },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 403 when Origin is not in the allowedOrigins list', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: ['https://allowed.com'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          Origin: 'https://notallowed.com',
+        },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('reflects the matching origin back when it is in allowedOrigins', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: ['https://myapp.com'] }],
+      [],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          Origin: 'https://myapp.com',
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://myapp.com');
+  });
+
+  it('returns * when allowedOrigins contains the wildcard and Origin is present', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: ['*'] }],
+      [],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          Origin: 'https://anyone.com',
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 });

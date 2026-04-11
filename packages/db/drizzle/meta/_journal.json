@@ -8,6 +8,20 @@
       "when": 1775895225570,
       "tag": "0000_nostalgic_maestro",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1744358400000,
+      "tag": "0001_multi_tenancy",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1744444800000,
+      "tag": "0002_org_scoped_data",
+      "breakpoints": true
     }
   ]
 }

@@ -58,42 +58,37 @@ describe('ECR', () => {
   });
 });
 
-describe('App Runner', () => {
-  it('creates an App Runner VPC connector', () => {
-    template.resourceCountIs('AWS::AppRunner::VpcConnector', 1);
-    template.hasResourceProperties('AWS::AppRunner::VpcConnector', {
-      VpcConnectorName: 'vexillo-connector',
+describe('ECS / ALB', () => {
+  it('creates an ECS cluster named vexillo', () => {
+    template.resourceCountIs('AWS::ECS::Cluster', 1);
+    template.hasResourceProperties('AWS::ECS::Cluster', {
+      ClusterName: 'vexillo',
     });
   });
 
-  it('creates an App Runner service with auto-deployments disabled', () => {
-    template.hasResourceProperties('AWS::AppRunner::Service', {
+  it('creates a Fargate task definition with the API container on port 8080', () => {
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      RequiresCompatibilities: ['FARGATE'],
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          PortMappings: Match.arrayWith([
+            Match.objectLike({ ContainerPort: 8080 }),
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('creates an ECS Fargate service named vexillo-api', () => {
+    template.hasResourceProperties('AWS::ECS::Service', {
       ServiceName: 'vexillo-api',
-      SourceConfiguration: {
-        AutoDeploymentsEnabled: false,
-        ImageRepository: {
-          ImageRepositoryType: 'ECR_PUBLIC',
-        },
-      },
+      LaunchType: 'FARGATE',
     });
   });
 
-  it('configures a health check on /health', () => {
-    template.hasResourceProperties('AWS::AppRunner::Service', {
-      HealthCheckConfiguration: {
-        Protocol: 'HTTP',
-        Path: '/health',
-      },
-    });
-  });
-
-  it('uses VPC egress via the connector', () => {
-    template.hasResourceProperties('AWS::AppRunner::Service', {
-      NetworkConfiguration: {
-        EgressConfiguration: {
-          EgressType: 'VPC',
-        },
-      },
+  it('creates an ALB with a health check on /health', () => {
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+      HealthCheckPath: '/health',
     });
   });
 });
@@ -165,6 +160,41 @@ describe('CloudFront', () => {
       },
     });
   });
+
+  it('creates a response headers policy with CSP, HSTS, and framing controls', () => {
+    template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: {
+        Name: 'vexillo-spa-security-headers',
+        SecurityHeadersConfig: {
+          ContentTypeOptions: { Override: true },
+          FrameOptions: { FrameOption: 'DENY', Override: true },
+          ReferrerPolicy: {
+            ReferrerPolicy: 'strict-origin-when-cross-origin',
+            Override: true,
+          },
+          StrictTransportSecurity: {
+            AccessControlMaxAgeSec: 365 * 24 * 60 * 60,
+            IncludeSubdomains: true,
+            Override: true,
+          },
+          ContentSecurityPolicy: {
+            ContentSecurityPolicy: Match.stringLikeRegexp("default-src 'self'"),
+            Override: true,
+          },
+        },
+      },
+    });
+  });
+
+  it('attaches the response headers policy to the default (SPA) behavior', () => {
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        DefaultCacheBehavior: {
+          ResponseHeadersPolicyId: Match.objectLike({ Ref: Match.anyValue() }),
+        },
+      },
+    });
+  });
 });
 
 describe('SSM Parameters', () => {
@@ -190,8 +220,16 @@ describe('Stack outputs', () => {
     template.hasOutput('CloudFrontUrl', {});
   });
 
-  it('exports App Runner service ARN', () => {
-    template.hasOutput('AppRunnerServiceArn', {});
+  it('exports ALB DNS name', () => {
+    template.hasOutput('AlbDnsName', {});
+  });
+
+  it('exports ECS cluster name', () => {
+    template.hasOutput('EcsClusterName', {});
+  });
+
+  it('exports ECS service name', () => {
+    template.hasOutput('EcsServiceName', {});
   });
 
   it('exports ECR repository URI', () => {
@@ -204,5 +242,9 @@ describe('Stack outputs', () => {
 
   it('exports CloudFront distribution ID', () => {
     template.hasOutput('CloudFrontDistributionId', {});
+  });
+
+  it('exports RDS endpoint', () => {
+    template.hasOutput('RdsEndpoint', {});
   });
 });

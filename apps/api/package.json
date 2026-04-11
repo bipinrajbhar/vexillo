@@ -6,7 +6,8 @@
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "promote:super-admin": "bun run scripts/promote-super-admin.ts"
   },
   "dependencies": {
     "@vexillo/db": "workspace:*",

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useParams } from '@tanstack/react-router'
 import { Flag, Plus, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { authClient } from '@/lib/auth-client'
+import { useOrg } from '@/lib/org-context'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,18 +42,17 @@ interface FlagsData {
 
 // ── Data fetching ────────────────────────────────────────────────────────────
 
-async function fetchFlags(): Promise<FlagsData> {
-  const res = await fetch('/api/dashboard/flags')
+async function fetchFlags(orgSlug: string): Promise<FlagsData> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags`)
   if (!res.ok) throw new Error(`Failed to load flags (${res.status})`)
   return res.json()
 }
 
-async function createFlag(body: {
-  name: string
-  key: string
-  description: string
-}): Promise<FlagRow> {
-  const res = await fetch('/api/dashboard/flags', {
+async function createFlag(
+  orgSlug: string,
+  body: { name: string; key: string; description: string },
+): Promise<FlagRow> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -63,8 +62,8 @@ async function createFlag(body: {
   return data.flag
 }
 
-async function toggleFlag(key: string, environmentId: string): Promise<boolean> {
-  const res = await fetch(`/api/dashboard/flags/${encodeURIComponent(key)}/toggle`, {
+async function toggleFlag(orgSlug: string, key: string, environmentId: string): Promise<boolean> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ environmentId }),
@@ -77,10 +76,12 @@ async function toggleFlag(key: string, environmentId: string): Promise<boolean> 
 // ── Create Flag Dialog ───────────────────────────────────────────────────────
 
 function CreateFlagDialog({
+  orgSlug,
   open,
   onOpenChange,
   onCreated,
 }: {
+  orgSlug: string
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated: (flag: FlagRow, envs: Env[]) => void
@@ -115,9 +116,8 @@ function CreateFlagDialog({
 
     setSubmitting(true)
     try {
-      const flag = await createFlag({ name: name.trim(), key: key.trim() || slugify(name), description: description.trim() })
-      // Refresh environments from the server so new flag has correct states
-      const data = await fetchFlags()
+      const flag = await createFlag(orgSlug, { name: name.trim(), key: key.trim() || slugify(name), description: description.trim() })
+      const data = await fetchFlags(orgSlug)
       onCreated(flag, data.environments)
       onOpenChange(false)
       setName('')
@@ -212,11 +212,13 @@ function CreateFlagDialog({
 function FlagTableRow({
   flag,
   environments,
+  orgSlug,
   isAdmin,
   onToggle,
 }: {
   flag: FlagRow
   environments: Env[]
+  orgSlug: string
   isAdmin: boolean
   onToggle: (flagKey: string, envId: string, envSlug: string) => void
 }) {
@@ -224,13 +226,12 @@ function FlagTableRow({
 
   return (
     <tr className="group border-b border-border last:border-0">
-      {/* Flag info */}
       <td className="py-3.5 pl-5 pr-4 sm:pl-6">
         <div className="flex min-w-0 items-start gap-3">
           <div className="min-w-0 flex-1">
             <Link
-              to="/flags/$key"
-              params={{ key: flag.key }}
+              to="/org/$slug/flags/$key"
+              params={{ slug: orgSlug, key: flag.key }}
               className="font-medium text-foreground hover:underline focus-visible:underline outline-none"
             >
               {flag.name}
@@ -254,7 +255,6 @@ function FlagTableRow({
         </div>
       </td>
 
-      {/* Per-environment toggles */}
       {environments.map((env) => (
         <td key={env.id} className="px-4 py-3.5 text-center">
           <Switch
@@ -266,11 +266,10 @@ function FlagTableRow({
         </td>
       ))}
 
-      {/* Chevron link */}
       <td className="py-3.5 pr-4 text-right sm:pr-5">
         <Link
-          to="/flags/$key"
-          params={{ key: flag.key }}
+          to="/org/$slug/flags/$key"
+          params={{ slug: orgSlug, key: flag.key }}
           className="inline-flex items-center justify-center rounded-sm p-1 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground focus-visible:opacity-100 outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={`Open ${flag.name}`}
         >
@@ -283,9 +282,9 @@ function FlagTableRow({
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-export function HomePage() {
-  const { data: session } = authClient.useSession()
-  const isAdmin = (session?.user as { role?: string | null } | undefined)?.role === 'admin'
+export function FlagsPage() {
+  const { org, role } = useOrg()
+  const isAdmin = role === 'admin'
 
   const [data, setData] = useState<FlagsData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -295,21 +294,20 @@ export function HomePage() {
   const load = useCallback(async () => {
     try {
       setError(null)
-      const result = await fetchFlags()
+      const result = await fetchFlags(org.slug)
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load flags')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [org.slug])
 
   useEffect(() => {
     load()
   }, [load])
 
   function handleToggle(flagKey: string, envId: string, envSlug: string) {
-    // Optimistic update
     setData((prev) => {
       if (!prev) return prev
       return {
@@ -322,8 +320,7 @@ export function HomePage() {
       }
     })
 
-    toggleFlag(flagKey, envId).then((enabled) => {
-      // Reconcile with server truth
+    toggleFlag(org.slug, flagKey, envId).then((enabled) => {
       setData((prev) => {
         if (!prev) return prev
         return {
@@ -336,7 +333,6 @@ export function HomePage() {
         }
       })
     }).catch((err) => {
-      // Roll back optimistic update
       setData((prev) => {
         if (!prev) return prev
         return {
@@ -371,7 +367,6 @@ export function HomePage() {
 
   return (
     <div className="page-container page-container-wide page-enter">
-      {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-8">
         <div className="flex items-center gap-3">
           <Flag className="h-5 w-5 text-muted-foreground mt-0.5" strokeWidth={1.75} />
@@ -392,21 +387,22 @@ export function HomePage() {
             </Button>
             {!loading && environments.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                <Link to="/environments" className="underline underline-offset-2">Create an environment</Link> first
+                <Link to="/org/$slug/environments" params={{ slug: org.slug }} className="underline underline-offset-2">
+                  Create an environment
+                </Link>{' '}
+                first
               </p>
             )}
           </div>
         )}
       </div>
 
-      {/* Error */}
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive mb-6">
           {error}
         </div>
       )}
 
-      {/* Loading */}
       {loading && (
         <div className="surface-card overflow-hidden">
           <div className="divide-y divide-border">
@@ -424,7 +420,6 @@ export function HomePage() {
         </div>
       )}
 
-      {/* Empty state */}
       {!loading && !error && flagsList.length === 0 && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center">
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -436,7 +431,10 @@ export function HomePage() {
           </p>
           {isAdmin && environments.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              <Link to="/environments" className="underline underline-offset-2">Create an environment</Link> before creating flags.
+              <Link to="/org/$slug/environments" params={{ slug: org.slug }} className="underline underline-offset-2">
+                Create an environment
+              </Link>{' '}
+              before creating flags.
             </p>
           )}
           {isAdmin && environments.length > 0 && (
@@ -448,7 +446,6 @@ export function HomePage() {
         </div>
       )}
 
-      {/* Flags table */}
       {!loading && !error && flagsList.length > 0 && (
         <div className="surface-card overflow-x-auto">
           <table className="w-full text-sm">
@@ -474,6 +471,7 @@ export function HomePage() {
                   key={flag.id}
                   flag={flag}
                   environments={environments}
+                  orgSlug={org.slug}
                   isAdmin={isAdmin}
                   onToggle={handleToggle}
                 />
@@ -483,11 +481,10 @@ export function HomePage() {
         </div>
       )}
 
-      {/* No environments notice */}
       {!loading && !error && flagsList.length > 0 && environments.length === 0 && (
         <p className="mt-4 text-sm text-muted-foreground">
           Create an{' '}
-          <Link to="/environments" className="underline underline-offset-2">
+          <Link to="/org/$slug/environments" params={{ slug: org.slug }} className="underline underline-offset-2">
             environment
           </Link>{' '}
           to start toggling flags.
@@ -495,6 +492,7 @@ export function HomePage() {
       )}
 
       <CreateFlagDialog
+        orgSlug={org.slug}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={handleCreated}

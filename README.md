@@ -1,19 +1,23 @@
 # Vexillo
 
-A self-hosted feature flag service with a React SDK.
+Self-hosted feature flag service. Manage flags per environment and organisation, with a React SDK for consumption.
 
-## Monorepo structure
+## Packages
 
 | Package | Description |
-|---|---|
-| `apps/web` | Next.js dashboard — manage flags, API keys, and users |
-| `packages/react-sdk` | `@vexillo/react-sdk` — React bindings for consuming flags |
+|---------|-------------|
+| `apps/api` | Hono API (Bun runtime) — auth, dashboard, SDK, super-admin, and invite endpoints |
+| `apps/web` | Vite + React dashboard — org management, flags, environments, and members |
+| `packages/db` | Drizzle ORM schema + PostgreSQL migrations shared by `api` and `web` |
+| `packages/react-sdk` | `@vexillo/react-sdk` — React bindings for consuming flags in any app |
 
 ## Prerequisites
 
-- Node.js 18+
-- pnpm 10+
-- A [Neon](https://neon.tech) Postgres database
+- [Bun](https://bun.sh) ≥ 1.x (API runtime)
+- [Node.js](https://nodejs.org) ≥ 20 (web tooling)
+- [pnpm](https://pnpm.io) ≥ 10
+- PostgreSQL ≥ 14
+- An [Okta](https://developer.okta.com) account
 
 ## Getting started
 
@@ -21,38 +25,42 @@ A self-hosted feature flag service with a React SDK.
 pnpm install
 ```
 
-### Web app
-
-Copy the env template and fill in your values:
+Set up environment variables for each app (see their individual READMEs), then push the schema to your database:
 
 ```sh
-cp apps/web/.env.local.example apps/web/.env.local
+pnpm --filter @vexillo/db db:push
 ```
 
-Set up the database and seed initial data:
-
-```sh
-pnpm --filter @vexillo/web db:setup
-```
-
-Start the dev server:
+Start everything in development mode:
 
 ```sh
 pnpm dev
 ```
 
-The dashboard runs at [http://localhost:3000](http://localhost:3000).
+- API: `http://localhost:3000`
+- Web dashboard: `http://localhost:5173`
 
-## React SDK
+## First-time setup
 
-See [`packages/react-sdk/README.md`](packages/react-sdk/README.md) for installation and usage.
+1. Sign in at `http://localhost:5173/sign-in` via your platform Okta app — the first account created becomes an admin
+2. Promote that account to super-admin:
+   ```sh
+   pnpm --filter @vexillo/api promote:super-admin -- --email you@example.com
+   ```
+3. Sign in again — you'll be redirected to `/admin`
+4. Create an organisation and configure its Okta OAuth credentials (use `https://<domain>.okta.com` as the issuer, not `/oauth2/default`)
+5. Org members sign in at `http://localhost:5173/org/<slug>/sign-in`
 
 ## Scripts
 
 | Command | Description |
-|---|---|
-| `pnpm dev` | Start all apps in development mode |
-| `pnpm build` | Build all packages and apps |
-| `pnpm lint` | Lint all packages and apps |
-| `pnpm --filter @vexillo/react-sdk test` | Run SDK tests |
-| `pnpm --filter @vexillo/web db:studio` | Open Drizzle Studio |
+|---------|-------------|
+| `pnpm dev` | Start all apps in watch mode |
+| `pnpm build` | Build all packages |
+| `pnpm test` | Run all test suites |
+| `pnpm typecheck` | Type-check all packages |
+| `pnpm lint` | Lint all packages |
+
+## React SDK
+
+See [`packages/react-sdk/README.md`](packages/react-sdk/README.md) for installation and usage.

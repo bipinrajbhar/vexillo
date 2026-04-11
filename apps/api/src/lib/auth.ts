@@ -42,6 +42,12 @@ export function createAuth(db: DbClient) {
           defaultValue: 'viewer',
           input: false,
         },
+        isSuperAdmin: {
+          type: 'boolean',
+          required: false,
+          defaultValue: false,
+          input: false,
+        },
       },
     },
     databaseHooks: {
@@ -56,6 +62,7 @@ export function createAuth(db: DbClient) {
               data: {
                 ...user,
                 role: existing ? 'viewer' : 'admin',
+                isSuperAdmin: false,
               },
             };
           },

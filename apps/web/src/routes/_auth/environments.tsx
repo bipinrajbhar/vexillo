@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { authClient } from '@/lib/auth-client'
+import { useOrg } from '@/lib/org-context'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,15 +28,15 @@ interface EnvRow {
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
-async function fetchEnvironments(): Promise<EnvRow[]> {
-  const res = await fetch('/api/dashboard/environments')
+async function fetchEnvironments(orgSlug: string): Promise<EnvRow[]> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/environments`)
   if (!res.ok) throw new Error(`Failed to load environments (${res.status})`)
   const data = await res.json()
   return data.environments
 }
 
-async function createEnvironment(name: string): Promise<{ environment: EnvRow; apiKey: string }> {
-  const res = await fetch('/api/dashboard/environments', {
+async function createEnvironment(orgSlug: string, name: string): Promise<{ environment: EnvRow; apiKey: string }> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/environments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -46,8 +46,8 @@ async function createEnvironment(name: string): Promise<{ environment: EnvRow; a
   return data
 }
 
-async function deleteEnvironment(id: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/environments/${encodeURIComponent(id)}`, {
+async function deleteEnvironment(orgSlug: string, id: string): Promise<void> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/environments/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
   if (!res.ok) {
@@ -56,8 +56,8 @@ async function deleteEnvironment(id: string): Promise<void> {
   }
 }
 
-async function rotateKey(id: string): Promise<string> {
-  const res = await fetch(`/api/dashboard/environments/${encodeURIComponent(id)}/rotate-key`, {
+async function rotateKey(orgSlug: string, id: string): Promise<string> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/environments/${encodeURIComponent(id)}/rotate-key`, {
     method: 'POST',
   })
   const data = await res.json()
@@ -65,8 +65,8 @@ async function rotateKey(id: string): Promise<string> {
   return data.apiKey
 }
 
-async function patchAllowedOrigins(id: string, allowedOrigins: string[]): Promise<void> {
-  const res = await fetch(`/api/dashboard/environments/${encodeURIComponent(id)}`, {
+async function patchAllowedOrigins(orgSlug: string, id: string, allowedOrigins: string[]): Promise<void> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/environments/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ allowedOrigins }),
@@ -78,10 +78,12 @@ async function patchAllowedOrigins(id: string, allowedOrigins: string[]): Promis
 // ── Create Environment Dialog ────────────────────────────────────────────────
 
 function CreateEnvDialog({
+  orgSlug,
   open,
   onOpenChange,
   onCreated,
 }: {
+  orgSlug: string
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated: (env: EnvRow, apiKey: string) => void
@@ -94,7 +96,7 @@ function CreateEnvDialog({
     if (!name.trim()) return
     setSubmitting(true)
     try {
-      const result = await createEnvironment(name.trim())
+      const result = await createEnvironment(orgSlug, name.trim())
       onCreated(result.environment, result.apiKey)
       onOpenChange(false)
       setName('')
@@ -154,13 +156,7 @@ function CreateEnvDialog({
 
 // ── New API Key Dialog ────────────────────────────────────────────────────────
 
-function NewApiKeyDialog({
-  apiKey,
-  onClose,
-}: {
-  apiKey: string
-  onClose: () => void
-}) {
+function NewApiKeyDialog({ apiKey, onClose }: { apiKey: string; onClose: () => void }) {
   const [copied, setCopied] = useState(false)
 
   async function handleCopy() {
@@ -199,10 +195,12 @@ function NewApiKeyDialog({
 // ── Delete Confirmation Dialog ────────────────────────────────────────────────
 
 function DeleteEnvDialog({
+  orgSlug,
   env,
   onClose,
   onDeleted,
 }: {
+  orgSlug: string
   env: EnvRow
   onClose: () => void
   onDeleted: (id: string) => void
@@ -212,7 +210,7 @@ function DeleteEnvDialog({
   async function handleDelete() {
     setDeleting(true)
     try {
-      await deleteEnvironment(env.id)
+      await deleteEnvironment(orgSlug, env.id)
       onDeleted(env.id)
       onClose()
       toast.success(`Environment "${env.name}" deleted`)
@@ -249,10 +247,12 @@ function DeleteEnvDialog({
 // ── Allowed Origins Editor ────────────────────────────────────────────────────
 
 function AllowedOriginsEditor({
+  orgSlug,
   env,
   onUpdated,
   disabled,
 }: {
+  orgSlug: string
   env: EnvRow
   onUpdated: (id: string, origins: string[]) => void
   disabled: boolean
@@ -279,10 +279,9 @@ function AllowedOriginsEditor({
   async function save(next: string[]) {
     setSaving(true)
     try {
-      await patchAllowedOrigins(env.id, next)
+      await patchAllowedOrigins(orgSlug, env.id, next)
       onUpdated(env.id, next)
     } catch (err) {
-      // Roll back
       setOrigins(env.allowedOrigins)
       toast.error(err instanceof Error ? err.message : 'Failed to update allowed origins')
     } finally {
@@ -346,12 +345,14 @@ function AllowedOriginsEditor({
 // ── Environment card ──────────────────────────────────────────────────────────
 
 function EnvironmentCard({
+  orgSlug,
   env,
   isAdmin,
   onRotateKey,
   onDelete,
   onOriginsUpdated,
 }: {
+  orgSlug: string
   env: EnvRow
   isAdmin: boolean
   onRotateKey: (apiKey: string) => void
@@ -363,7 +364,7 @@ function EnvironmentCard({
   async function handleRotate() {
     setRotating(true)
     try {
-      const key = await rotateKey(env.id)
+      const key = await rotateKey(orgSlug, env.id)
       onRotateKey(key)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to rotate key')
@@ -408,7 +409,6 @@ function EnvironmentCard({
       </div>
 
       <div className="border-t border-border px-5 py-4 sm:px-6 space-y-4">
-        {/* API key hint */}
         <div className="space-y-1">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             API key
@@ -420,8 +420,8 @@ function EnvironmentCard({
           )}
         </div>
 
-        {/* Allowed origins */}
         <AllowedOriginsEditor
+          orgSlug={orgSlug}
           env={env}
           onUpdated={onOriginsUpdated}
           disabled={!isAdmin}
@@ -434,8 +434,8 @@ function EnvironmentCard({
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function EnvironmentsPage() {
-  const { data: session } = authClient.useSession()
-  const isAdmin = (session?.user as { role?: string | null } | undefined)?.role === 'admin'
+  const { org, role } = useOrg()
+  const isAdmin = role === 'admin'
 
   const [envs, setEnvs] = useState<EnvRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -447,14 +447,14 @@ export function EnvironmentsPage() {
   const load = useCallback(async () => {
     try {
       setError(null)
-      const result = await fetchEnvironments()
+      const result = await fetchEnvironments(org.slug)
       setEnvs(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load environments')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [org.slug])
 
   useEffect(() => {
     load()
@@ -480,7 +480,6 @@ export function EnvironmentsPage() {
 
   return (
     <div className="page-container page-container-wide page-enter">
-      {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-8">
         <div className="flex items-center gap-3">
           <Boxes className="h-5 w-5 text-muted-foreground mt-0.5" strokeWidth={1.75} />
@@ -497,14 +496,12 @@ export function EnvironmentsPage() {
         )}
       </div>
 
-      {/* Error */}
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive mb-6">
           {error}
         </div>
       )}
 
-      {/* Loading */}
       {loading && (
         <div className="space-y-4">
           {[...Array(2)].map((_, i) => (
@@ -516,7 +513,6 @@ export function EnvironmentsPage() {
         </div>
       )}
 
-      {/* Empty state */}
       {!loading && !error && envs.length === 0 && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center">
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -535,12 +531,12 @@ export function EnvironmentsPage() {
         </div>
       )}
 
-      {/* Environment cards */}
       {!loading && !error && envs.length > 0 && (
         <div className="space-y-4">
           {envs.map((env) => (
             <EnvironmentCard
               key={env.id}
+              orgSlug={org.slug}
               env={env}
               isAdmin={isAdmin}
               onRotateKey={handleRotateKey}
@@ -551,8 +547,8 @@ export function EnvironmentsPage() {
         </div>
       )}
 
-      {/* Dialogs */}
       <CreateEnvDialog
+        orgSlug={org.slug}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={handleCreated}
@@ -564,6 +560,7 @@ export function EnvironmentsPage() {
 
       {deleteTarget && (
         <DeleteEnvDialog
+          orgSlug={org.slug}
           env={deleteTarget}
           onClose={() => setDeleteTarget(null)}
           onDeleted={handleDeleted}
