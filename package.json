@@ -13,6 +13,7 @@
     "turbo": "latest",
     "typescript": "^5"
   },
+  "workspaces": ["apps/*", "packages/*"],
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild", "sharp", "unrs-resolver"]
