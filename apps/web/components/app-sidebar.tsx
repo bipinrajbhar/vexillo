@@ -13,28 +13,39 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
+import type { OrgInfo } from '@/lib/org-context'
 
 export function AppSidebar({
-  session,
+  org,
+  role,
+  userEmail,
 }: {
-  session: { user: { email: string; role?: string | null } } | null
+  org: OrgInfo
+  role: string
+  userEmail: string
 }) {
   const { location } = useRouterState()
   const pathname = location.pathname
-  const isAdmin = session?.user.role === 'admin'
+  const slug = org.slug
+  const isAdmin = role === 'admin'
+
+  const flagsPath = `/org/${slug}/flags`
+  const environmentsPath = `/org/${slug}/environments`
+  const membersPath = `/org/${slug}/members`
 
   return (
     <Sidebar collapsible="offcanvas" className="bg-sidebar">
       <SidebarHeader className="gap-0 border-b border-sidebar-border px-4 py-5">
         <Link
-          to="/"
+          to="/org/$slug/flags"
+          params={{ slug }}
           className="block rounded-sm outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
           <span className="font-heading text-lg font-medium tracking-[-0.02em] text-sidebar-foreground">
-            Vexillo
+            {org.name}
           </span>
           <span className="mt-0.5 block text-[0.65rem] font-medium text-sidebar-foreground/50">
-            Feature flags
+            {slug}
           </span>
         </Link>
       </SidebarHeader>
@@ -44,9 +55,12 @@ export function AppSidebar({
             <SidebarMenu className="gap-2">
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  isActive={pathname === '/' || pathname.startsWith('/flags/')}
+                  isActive={
+                    pathname === flagsPath ||
+                    pathname.startsWith(`/org/${slug}/flags/`)
+                  }
                   className="px-3 py-2.5"
-                  render={<Link to="/" />}
+                  render={<Link to="/org/$slug/flags" params={{ slug }} />}
                 >
                   <Flag className="opacity-80" />
                   <span className="font-medium">Flags</span>
@@ -54,9 +68,9 @@ export function AppSidebar({
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  isActive={pathname.startsWith('/environments')}
+                  isActive={pathname === environmentsPath}
                   className="px-3 py-2.5"
-                  render={<Link to="/environments" />}
+                  render={<Link to="/org/$slug/environments" params={{ slug }} />}
                 >
                   <Boxes className="opacity-80" />
                   <span className="font-medium">Environments</span>
@@ -65,9 +79,9 @@ export function AppSidebar({
               {isAdmin && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    isActive={pathname.startsWith('/members')}
+                    isActive={pathname === membersPath}
                     className="px-3 py-2.5"
-                    render={<Link to="/members" />}
+                    render={<Link to="/org/$slug/members" params={{ slug }} />}
                   >
                     <Users className="opacity-80" />
                     <span className="font-medium">Members</span>
@@ -79,21 +93,17 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border p-4">
-        {session ? (
-          <>
-            <p
-              className="mb-3 truncate text-xs leading-snug text-sidebar-foreground/80"
-              title={session.user.email}
-            >
-              {session.user.email}
-            </p>
-            <SignOutButton
-              variant="outline"
-              size="sm"
-              className="w-full justify-center border-sidebar-border bg-sidebar-accent/35 text-sidebar-foreground shadow-surface-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:bg-sidebar-accent/25"
-            />
-          </>
-        ) : null}
+        <p
+          className="mb-3 truncate text-xs leading-snug text-sidebar-foreground/80"
+          title={userEmail}
+        >
+          {userEmail}
+        </p>
+        <SignOutButton
+          variant="outline"
+          size="sm"
+          className="w-full justify-center border-sidebar-border bg-sidebar-accent/35 text-sidebar-foreground shadow-surface-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:bg-sidebar-accent/25"
+        />
       </SidebarFooter>
     </Sidebar>
   )

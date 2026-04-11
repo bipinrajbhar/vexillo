@@ -8,39 +8,47 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@/components/ui/sidebar'
+import type { OrgInfo } from '@/lib/org-context'
 
 function headerTitle(pathname: string): string {
-  if (pathname === '/') return 'Feature flags'
-  if (pathname.startsWith('/environments')) return 'Environments'
-  if (pathname.startsWith('/members')) return 'Members'
-  if (pathname.startsWith('/flags/')) {
-    const key = pathname.slice('/flags/'.length)
-    const decoded = key ? decodeURIComponent(key) : ''
-    return decoded || 'Flag'
+  // /org/:slug/flags/:key → flag key
+  const flagDetailMatch = pathname.match(/^\/org\/[^/]+\/flags\/(.+)$/)
+  if (flagDetailMatch) {
+    const key = decodeURIComponent(flagDetailMatch[1])
+    return key || 'Flag'
   }
+  if (pathname.match(/^\/org\/[^/]+\/flags$/)) return 'Feature flags'
+  if (pathname.match(/^\/org\/[^/]+\/environments$/)) return 'Environments'
+  if (pathname.match(/^\/org\/[^/]+\/members$/)) return 'Members'
+  if (pathname.match(/^\/org\/[^/]+\/settings$/)) return 'Settings'
   return 'Vexillo'
 }
 
 export function AppShell({
-  session,
+  org,
+  role,
+  userEmail,
   children,
 }: {
-  session: { user: { email: string; role?: string | null } } | null
+  org: OrgInfo
+  role: string
+  userEmail: string
   children: React.ReactNode
 }) {
   const { location } = useRouterState()
   const pathname = location.pathname
   const title = headerTitle(pathname)
+  const isFlagDetail = !!pathname.match(/^\/org\/[^/]+\/flags\/.+$/)
 
   return (
     <SidebarProvider>
-      <AppSidebar session={session} />
+      <AppSidebar org={org} role={role} userEmail={userEmail} />
       <SidebarInset className="min-h-dvh min-w-0">
         <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur-sm supports-backdrop-filter:bg-background/80 sm:px-6">
           <SidebarTrigger className="-ms-1" />
           <div
             className="min-w-0 flex-1 truncate font-heading text-[0.9375rem] font-medium tracking-[-0.015em] text-foreground sm:text-base"
-            title={pathname.startsWith('/flags/') ? title : undefined}
+            title={isFlagDetail ? title : undefined}
           >
             {title}
           </div>

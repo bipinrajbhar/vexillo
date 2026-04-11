@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, timestamp, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, boolean, timestamp, primaryKey, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // ── Organizations ─────────────────────────────────────────────────────────────
@@ -88,24 +88,28 @@ export const authVerification = pgTable('verification', {
 });
 
 // ── Feature flags ─────────────────────────────────────────────────────────────
-// Note: org_id will be added to environments and flags in the next migration,
-// once dashboard routes are rewritten to include :orgSlug context.
 
 export const environments = pgTable('environments', {
   id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  slug: text('slug').notNull().unique(),
+  slug: text('slug').notNull(),
   allowedOrigins: text('allowed_origins').array().notNull().default(sql`'{}'::text[]`),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  unique('environments_org_id_slug_unique').on(table.orgId, table.slug),
+]);
 
 export const flags = pgTable('flags', {
   id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  key: text('key').notNull().unique(),
+  key: text('key').notNull(),
   description: text('description').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  unique('flags_org_id_key_unique').on(table.orgId, table.key),
+]);
 
 export const flagStates = pgTable('flag_states', {
   flagId: uuid('flag_id').notNull().references(() => flags.id, { onDelete: 'cascade' }),

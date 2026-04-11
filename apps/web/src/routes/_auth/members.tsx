@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, Trash2, ChevronDown } from 'lucide-react'
+import { Users, Trash2, ChevronDown, Mail } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { authClient } from '@/lib/auth-client'
+import { useOrg } from '@/lib/org-context'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,15 +32,15 @@ interface Member {
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
-async function fetchMembers(): Promise<Member[]> {
-  const res = await fetch('/api/dashboard/members')
+async function fetchMembers(orgSlug: string): Promise<Member[]> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/members`)
   if (!res.ok) throw new Error(`Failed to load members (${res.status})`)
   const data = await res.json()
   return data.members
 }
 
-async function patchMemberRole(id: string, role: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/members/${encodeURIComponent(id)}`, {
+async function patchMemberRole(orgSlug: string, id: string, role: string): Promise<void> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role }),
@@ -48,8 +49,8 @@ async function patchMemberRole(id: string, role: string): Promise<void> {
   if (!res.ok) throw new Error(data.error ?? 'Failed to update role')
 }
 
-async function deleteMember(id: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/members/${encodeURIComponent(id)}`, {
+async function deleteMember(orgSlug: string, id: string): Promise<void> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
   if (!res.ok) {
@@ -61,10 +62,12 @@ async function deleteMember(id: string): Promise<void> {
 // ── Remove Confirmation Dialog ────────────────────────────────────────────────
 
 function RemoveMemberDialog({
+  orgSlug,
   member,
   onClose,
   onRemoved,
 }: {
+  orgSlug: string
   member: Member
   onClose: () => void
   onRemoved: (id: string) => void
@@ -74,7 +77,7 @@ function RemoveMemberDialog({
   async function handleRemove() {
     setRemoving(true)
     try {
-      await deleteMember(member.id)
+      await deleteMember(orgSlug, member.id)
       onRemoved(member.id)
       onClose()
       toast.success(`${member.name} removed`)
@@ -92,8 +95,7 @@ function RemoveMemberDialog({
           <DialogTitle>Remove member?</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          <strong>{member.name}</strong> ({member.email}) will lose access immediately. They can
-          sign in again via Okta to rejoin as a viewer.
+          <strong>{member.name}</strong> ({member.email}) will lose access immediately.
         </p>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={removing}>
@@ -111,12 +113,14 @@ function RemoveMemberDialog({
 // ── Member row ────────────────────────────────────────────────────────────────
 
 function MemberRow({
+  orgSlug,
   member,
   currentUserId,
   isAdmin,
   onRoleChange,
   onRemove,
 }: {
+  orgSlug: string
   member: Member
   currentUserId: string | undefined
   isAdmin: boolean
@@ -130,7 +134,7 @@ function MemberRow({
     if (newRole === member.role) return
     setChangingRole(true)
     try {
-      await patchMemberRole(member.id, newRole)
+      await patchMemberRole(orgSlug, member.id, newRole)
       onRoleChange(member.id, newRole)
       toast.success(`${member.name} is now a${newRole === 'admin' ? 'n' : ''} ${newRole}`)
     } catch (err) {
@@ -142,12 +146,10 @@ function MemberRow({
 
   return (
     <div className="flex items-center gap-4 px-5 py-4 sm:px-6">
-      {/* Avatar placeholder */}
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[0.75rem] font-medium text-muted-foreground uppercase select-none">
         {member.name.charAt(0)}
       </div>
 
-      {/* Info */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-foreground truncate">{member.name}</p>
@@ -160,7 +162,6 @@ function MemberRow({
         <p className="text-[0.75rem] text-muted-foreground truncate">{member.email}</p>
       </div>
 
-      {/* Role + actions */}
       <div className="flex items-center gap-2 shrink-0">
         {isAdmin && !isSelf ? (
           <DropdownMenu>
@@ -205,8 +206,9 @@ function MemberRow({
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function MembersPage() {
-  const { data: session, isPending: sessionPending } = authClient.useSession()
-  const isAdmin = (session?.user as { role?: string | null } | undefined)?.role === 'admin'
+  const { org, role } = useOrg()
+  const isAdmin = role === 'admin'
+  const { data: session } = authClient.useSession()
   const currentUserId = session?.user?.id
 
   const [members, setMembers] = useState<Member[]>([])
@@ -215,28 +217,27 @@ export function MembersPage() {
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null)
 
   const load = useCallback(async () => {
-    if (sessionPending) return
     if (!isAdmin) {
       setLoading(false)
       return
     }
     try {
       setError(null)
-      const result = await fetchMembers()
+      const result = await fetchMembers(org.slug)
       setMembers(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load members')
     } finally {
       setLoading(false)
     }
-  }, [isAdmin, sessionPending])
+  }, [isAdmin, org.slug])
 
   useEffect(() => {
     load()
   }, [load])
 
-  function handleRoleChange(id: string, role: string) {
-    setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, role } : m)))
+  function handleRoleChange(id: string, newRole: string) {
+    setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, role: newRole } : m)))
   }
 
   function handleRemoved(id: string) {
@@ -245,7 +246,6 @@ export function MembersPage() {
 
   return (
     <div className="page-container page-container-wide page-enter">
-      {/* Header */}
       <div className="flex items-center gap-3 mb-8">
         <Users className="h-5 w-5 text-muted-foreground" strokeWidth={1.75} />
         <div>
@@ -254,21 +254,18 @@ export function MembersPage() {
         </div>
       </div>
 
-      {/* Viewer notice */}
       {!isAdmin && !loading && (
         <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground mb-6">
           Only admins can manage members.
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive mb-6">
           {error}
         </div>
       )}
 
-      {/* Loading */}
       {loading && (
         <div className="surface-card divide-y divide-border">
           {[...Array(3)].map((_, i) => (
@@ -284,12 +281,12 @@ export function MembersPage() {
         </div>
       )}
 
-      {/* Members list */}
       {!loading && !error && members.length > 0 && (
         <div className="surface-card divide-y divide-border">
           {members.map((member) => (
             <MemberRow
               key={member.id}
+              orgSlug={org.slug}
               member={member}
               currentUserId={currentUserId}
               isAdmin={isAdmin}
@@ -300,28 +297,21 @@ export function MembersPage() {
         </div>
       )}
 
-      {/* Empty state */}
-      {!loading && !error && members.length === 0 && (
+      {!loading && !error && members.length === 0 && isAdmin && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center">
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <Users className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
+            <Mail className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
           </div>
           <h2 className="text-base font-medium text-foreground mb-1">No members yet</h2>
           <p className="text-sm text-muted-foreground max-w-xs">
-            Members join automatically when they sign in with Okta for the first time.
+            Invite people to this organisation to give them access.
           </p>
         </div>
       )}
 
-      {/* Hint about joining */}
-      {!loading && !error && members.length > 0 && (
-        <p className="mt-4 text-xs text-muted-foreground">
-          New members join automatically when they sign in with Okta. They start as viewers.
-        </p>
-      )}
-
       {removeTarget && (
         <RemoveMemberDialog
+          orgSlug={org.slug}
           member={removeTarget}
           onClose={() => setRemoveTarget(null)}
           onRemoved={handleRemoved}

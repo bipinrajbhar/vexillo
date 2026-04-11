@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { ArrowLeft, Flag, Pencil, Check, X, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { authClient } from '@/lib/auth-client'
+import { useOrg } from '@/lib/org-context'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,8 +37,8 @@ interface Env {
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
-async function fetchFlagDetail(key: string): Promise<{ flag: FlagRow; environments: Env[] }> {
-  const res = await fetch('/api/dashboard/flags')
+async function fetchFlagDetail(orgSlug: string, key: string): Promise<{ flag: FlagRow; environments: Env[] }> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags`)
   if (!res.ok) throw new Error(`Failed to load flags (${res.status})`)
   const data = await res.json()
   const flag = (data.flags as FlagRow[]).find((f) => f.key === key)
@@ -47,10 +47,11 @@ async function fetchFlagDetail(key: string): Promise<{ flag: FlagRow; environmen
 }
 
 async function patchFlag(
+  orgSlug: string,
   key: string,
   body: { name?: string; description?: string },
 ): Promise<FlagRow> {
-  const res = await fetch(`/api/dashboard/flags/${encodeURIComponent(key)}`, {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -60,8 +61,8 @@ async function patchFlag(
   return data.flag
 }
 
-async function deleteFlag(key: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/flags/${encodeURIComponent(key)}`, {
+async function deleteFlag(orgSlug: string, key: string): Promise<void> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}`, {
     method: 'DELETE',
   })
   if (!res.ok) {
@@ -70,8 +71,8 @@ async function deleteFlag(key: string): Promise<void> {
   }
 }
 
-async function toggleFlag(key: string, environmentId: string): Promise<boolean> {
-  const res = await fetch(`/api/dashboard/flags/${encodeURIComponent(key)}/toggle`, {
+async function toggleFlag(orgSlug: string, key: string, environmentId: string): Promise<boolean> {
+  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ environmentId }),
@@ -185,10 +186,10 @@ function EditableField({
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function FlagDetailPage() {
-  const { key } = useParams({ from: '/auth/flags/$key' })
+  const { org, role } = useOrg()
+  const isAdmin = role === 'admin'
+  const { key } = useParams({ strict: false }) as { key: string }
   const navigate = useNavigate()
-  const { data: session } = authClient.useSession()
-  const isAdmin = (session?.user as { role?: string | null } | undefined)?.role === 'admin'
 
   const [flag, setFlag] = useState<FlagRow | null>(null)
   const [environments, setEnvironments] = useState<Env[]>([])
@@ -200,7 +201,7 @@ export function FlagDetailPage() {
   const load = useCallback(async () => {
     try {
       setError(null)
-      const result = await fetchFlagDetail(key)
+      const result = await fetchFlagDetail(org.slug, key)
       setFlag(result.flag)
       setEnvironments(result.environments)
     } catch (err) {
@@ -208,7 +209,7 @@ export function FlagDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [key])
+  }, [org.slug, key])
 
   useEffect(() => {
     load()
@@ -217,17 +218,15 @@ export function FlagDetailPage() {
   function handleToggle(envId: string, envSlug: string) {
     if (!flag) return
 
-    // Optimistic update
     setFlag((prev) =>
       prev ? { ...prev, states: { ...prev.states, [envSlug]: !prev.states[envSlug] } } : prev,
     )
 
-    toggleFlag(key, envId).then((enabled) => {
+    toggleFlag(org.slug, key, envId).then((enabled) => {
       setFlag((prev) =>
         prev ? { ...prev, states: { ...prev.states, [envSlug]: enabled } } : prev,
       )
     }).catch((err) => {
-      // Roll back
       setFlag((prev) =>
         prev ? { ...prev, states: { ...prev.states, [envSlug]: !prev.states[envSlug] } } : prev,
       )
@@ -236,13 +235,13 @@ export function FlagDetailPage() {
   }
 
   async function handleSaveName(name: string) {
-    const updated = await patchFlag(key, { name })
+    const updated = await patchFlag(org.slug, key, { name })
     setFlag((prev) => (prev ? { ...prev, name: updated.name } : prev))
     toast.success('Name updated')
   }
 
   async function handleSaveDescription(description: string) {
-    const updated = await patchFlag(key, { description })
+    const updated = await patchFlag(org.slug, key, { description })
     setFlag((prev) => (prev ? { ...prev, description: updated.description } : prev))
     toast.success('Description updated')
   }
@@ -250,9 +249,9 @@ export function FlagDetailPage() {
   async function handleDelete() {
     setDeleting(true)
     try {
-      await deleteFlag(key)
+      await deleteFlag(org.slug, key)
       toast.success(`Flag "${flag?.name}" deleted`)
-      navigate({ to: '/' })
+      navigate({ to: '/org/$slug/flags', params: { slug: org.slug } })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete flag')
       setDeleting(false)
@@ -275,7 +274,8 @@ export function FlagDetailPage() {
     return (
       <div className="page-container page-container-narrow">
         <Link
-          to="/"
+          to="/org/$slug/flags"
+          params={{ slug: org.slug }}
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-8"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -290,16 +290,15 @@ export function FlagDetailPage() {
 
   return (
     <div className="page-container page-container-narrow page-enter">
-      {/* Back link */}
       <Link
-        to="/"
+        to="/org/$slug/flags"
+        params={{ slug: org.slug }}
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-8 focus-visible:underline outline-none"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         Back to flags
       </Link>
 
-      {/* Flag header */}
       <div className="flex items-start gap-3 mb-8">
         <Flag className="h-5 w-5 text-muted-foreground mt-1 shrink-0" strokeWidth={1.75} />
         <div className="min-w-0 flex-1">
@@ -319,7 +318,6 @@ export function FlagDetailPage() {
       </div>
 
       <div className="space-y-8">
-        {/* Details card */}
         <div className="surface-card px-5 py-5 sm:px-6 space-y-5">
           <h2 className="text-[0.8125rem] font-semibold text-foreground">Details</h2>
           <EditableField
@@ -337,7 +335,6 @@ export function FlagDetailPage() {
           />
         </div>
 
-        {/* Environments card */}
         <div className="surface-card overflow-hidden">
           <div className="px-5 py-4 sm:px-6 border-b border-border">
             <h2 className="text-[0.8125rem] font-semibold text-foreground">Environments</h2>
@@ -352,7 +349,7 @@ export function FlagDetailPage() {
             <div className="px-5 py-8 sm:px-6 text-center">
               <p className="text-sm text-muted-foreground">
                 No environments yet.{' '}
-                <Link to="/environments" className="underline underline-offset-2">
+                <Link to="/org/$slug/environments" params={{ slug: org.slug }} className="underline underline-offset-2">
                   Create one
                 </Link>{' '}
                 to start using this flag.
@@ -388,7 +385,6 @@ export function FlagDetailPage() {
           )}
         </div>
 
-        {/* Danger zone */}
         {isAdmin && (
           <div className="surface-card px-5 py-5 sm:px-6">
             <h2 className="text-[0.8125rem] font-semibold text-destructive mb-3">Danger zone</h2>
@@ -413,7 +409,6 @@ export function FlagDetailPage() {
         )}
       </div>
 
-      {/* Delete confirmation dialog */}
       <Dialog open={deleteOpen} onOpenChange={(v) => { if (!deleting) setDeleteOpen(v) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
