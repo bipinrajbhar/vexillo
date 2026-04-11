@@ -141,6 +141,15 @@ export class VexilloStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // ── SSM parameter references (created later, referenced here by name) ──────
+    // fromStringParameterName does NOT create a new parameter — it's just a
+    // reference used by ECS secrets injection. The actual parameters are created
+    // in the SSM section below and their read grant is added to executionRole.
+    const ssmRef = (name: string) =>
+      ecs.Secret.fromSsmParameter(
+        ssm.StringParameter.fromStringParameterName(this, `Ref${name.replace(/\//g, '').replace(/_/g, '')}`, name),
+      );
+
     // ── ECS Fargate service + ALB (ECS Express Mode pattern) ─────────────────
     // Uses a placeholder public image for initial deploy.
     // CI/CD updates the service with the real ECR image via `ecs update-service`.
@@ -170,7 +179,19 @@ export class VexilloStack extends cdk.Stack {
             streamPrefix: 'api',
           }),
           environment: {
-            DATABASE_URL: 'placeholder',
+            PORT: '8080',
+            NODE_ENV: 'production',
+          },
+          // ECS injects these SSM values as env vars before the container starts.
+          // Update the SSM parameters with real values before the first deploy.
+          secrets: {
+            DATABASE_URL:                ssmRef('/vexillo/DATABASE_URL'),
+            BETTER_AUTH_SECRET:          ssmRef('/vexillo/BETTER_AUTH_SECRET'),
+            BETTER_AUTH_URL:             ssmRef('/vexillo/BETTER_AUTH_URL'),
+            BETTER_AUTH_TRUSTED_ORIGINS: ssmRef('/vexillo/BETTER_AUTH_TRUSTED_ORIGINS'),
+            OKTA_CLIENT_ID:              ssmRef('/vexillo/OKTA_CLIENT_ID'),
+            OKTA_CLIENT_SECRET:          ssmRef('/vexillo/OKTA_CLIENT_SECRET'),
+            OKTA_ISSUER:                 ssmRef('/vexillo/OKTA_ISSUER'),
           },
         },
         healthCheck: {
@@ -304,7 +325,9 @@ export class VexilloStack extends cdk.Stack {
     });
 
     // ── SSM Parameter Store — secret placeholders ─────────────────────────────
-    const ssmParams: Record<string, string> = {
+    // After cdk deploy, run `aws ssm put-parameter --overwrite` to replace
+    // REPLACE_ME values with real secrets before the first app deploy.
+    const secretDefs: Record<string, string> = {
       '/vexillo/DATABASE_URL': 'REPLACE_ME',
       '/vexillo/BETTER_AUTH_SECRET': 'REPLACE_ME',
       '/vexillo/BETTER_AUTH_URL': `https://${distribution.distributionDomainName}`,
@@ -314,14 +337,17 @@ export class VexilloStack extends cdk.Stack {
       '/vexillo/OKTA_ISSUER': 'REPLACE_ME',
     };
 
-    for (const [name, value] of Object.entries(ssmParams)) {
+    const ssmParameters: Record<string, ssm.StringParameter> = {};
+    for (const [name, value] of Object.entries(secretDefs)) {
       const id = name.replace(/\//g, '').replace(/_/g, '');
-      new ssm.StringParameter(this, `Param${id}`, {
+      ssmParameters[name] = new ssm.StringParameter(this, `Param${id}`, {
         parameterName: name,
         stringValue: value,
         description: 'Vexillo runtime secret - update before first deploy',
         tier: ssm.ParameterTier.STANDARD,
       });
+      // Grant the task execution role permission to read this parameter at task startup
+      ssmParameters[name].grantRead(executionRole);
     }
 
     // ── Stack outputs ─────────────────────────────────────────────────────────
