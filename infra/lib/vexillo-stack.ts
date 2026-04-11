@@ -104,7 +104,7 @@ export class VexilloStack extends cdk.Stack {
     const cluster = new ecs.Cluster(this, 'Cluster', {
       vpc,
       clusterName: 'vexillo',
-      containerInsights: true,
+      containerInsightsV2: ecs.ContainerInsights.ENABLED,
     });
 
     // ── Task execution role (pull image from ECR, write logs) ─────────────────
@@ -177,8 +177,8 @@ export class VexilloStack extends cdk.Stack {
           command: ['CMD-SHELL', 'curl -f http://localhost:8080/health || exit 1'],
           interval: cdk.Duration.seconds(10),
           timeout: cdk.Duration.seconds(5),
-          healthyThresholdCount: 1,
-          unhealthyThresholdCount: 5,
+          retries: 5,
+          startPeriod: cdk.Duration.seconds(30),
         },
       },
     );
