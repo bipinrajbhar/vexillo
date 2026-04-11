@@ -174,7 +174,7 @@ export class VexilloStack extends cdk.Stack {
           },
         },
         healthCheck: {
-          command: ['CMD-SHELL', 'curl -f http://localhost:8080/health || exit 1'],
+          command: ['CMD-SHELL', 'curl -f http://localhost:8080/ || exit 1'],
           interval: cdk.Duration.seconds(10),
           timeout: cdk.Duration.seconds(5),
           retries: 5,
@@ -182,6 +182,17 @@ export class VexilloStack extends cdk.Stack {
         },
       },
     );
+
+    // ALB target group health check — use / for the placeholder image;
+    // the real API image serves /health which is a superset.
+    apiService.targetGroup.configureHealthCheck({
+      path: '/',
+      healthyHttpCodes: '200-399',
+      interval: cdk.Duration.seconds(15),
+      timeout: cdk.Duration.seconds(5),
+      healthyThresholdCount: 2,
+      unhealthyThresholdCount: 3,
+    });
 
     // Allow ALB to reach the ECS tasks on port 8080
     apiService.service.connections.allowFrom(
