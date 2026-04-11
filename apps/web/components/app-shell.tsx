@@ -1,26 +1,24 @@
-"use client"
+import * as React from 'react'
+import { useRouterState } from '@tanstack/react-router'
 
-import * as React from "react"
-import { usePathname } from "next/navigation"
-
-import { AppSidebar } from "@/components/app-sidebar"
-import { ModeToggle } from "@/components/mode-toggle"
+import { AppSidebar } from '@/components/app-sidebar'
+import { ModeToggle } from '@/components/mode-toggle'
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
-} from "@/components/ui/sidebar"
+} from '@/components/ui/sidebar'
 
 function headerTitle(pathname: string): string {
-  if (pathname === "/") return "Feature flags"
-  if (pathname.startsWith("/environments")) return "Environments"
-  if (pathname.startsWith("/members")) return "Members"
-  if (pathname.startsWith("/flags/")) {
-    const key = pathname.slice("/flags/".length)
-    const decoded = key ? decodeURIComponent(key) : ""
-    return decoded || "Flag"
+  if (pathname === '/') return 'Feature flags'
+  if (pathname.startsWith('/environments')) return 'Environments'
+  if (pathname.startsWith('/members')) return 'Members'
+  if (pathname.startsWith('/flags/')) {
+    const key = pathname.slice('/flags/'.length)
+    const decoded = key ? decodeURIComponent(key) : ''
+    return decoded || 'Flag'
   }
-  return "Vexillo"
+  return 'Vexillo'
 }
 
 export function AppShell({
@@ -30,12 +28,9 @@ export function AppShell({
   session: { user: { email: string; role?: string | null } } | null
   children: React.ReactNode
 }) {
-  const pathname = usePathname()
+  const { location } = useRouterState()
+  const pathname = location.pathname
   const title = headerTitle(pathname)
-
-  if (pathname === "/sign-in") {
-    return <>{children}</>
-  }
 
   return (
     <SidebarProvider>
@@ -45,7 +40,7 @@ export function AppShell({
           <SidebarTrigger className="-ms-1" />
           <div
             className="min-w-0 flex-1 truncate font-heading text-[0.9375rem] font-medium tracking-[-0.015em] text-foreground sm:text-base"
-            title={pathname.startsWith("/flags/") ? title : undefined}
+            title={pathname.startsWith('/flags/') ? title : undefined}
           >
             {title}
           </div>

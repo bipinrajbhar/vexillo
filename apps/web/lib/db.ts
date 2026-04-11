@@ -1,6 +1,5 @@
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-http';
-import * as schema from './schema';
+import { createDbClient } from '@vexillo/db';
 
-const sql = neon(process.env.DATABASE_URL!);
-export const db = drizzle(sql, { schema });
+// Single shared client for the Next.js app.
+// Uses max:1 to avoid connection pool exhaustion in serverless/edge deployments.
+export const db = createDbClient(process.env.DATABASE_URL!, { max: 1 });

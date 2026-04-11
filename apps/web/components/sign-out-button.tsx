@@ -1,8 +1,6 @@
-'use client';
-
-import { useRouter } from 'next/navigation';
-import { authClient } from '@/lib/auth-client';
-import { Button } from '@/components/ui/button';
+import { useNavigate } from '@tanstack/react-router'
+import { authClient } from '@/lib/auth-client'
+import { Button } from '@/components/ui/button'
 
 type SignOutButtonProps = Omit<React.ComponentProps<typeof Button>, 'onClick' | 'type'>
 
@@ -12,14 +10,14 @@ export function SignOutButton({
   className,
   ...props
 }: SignOutButtonProps) {
-  const router = useRouter();
+  const navigate = useNavigate()
 
   async function handleSignOut() {
     await authClient.signOut({
       fetchOptions: {
-        onSuccess: () => router.push('/sign-in'),
+        onSuccess: () => navigate({ to: '/sign-in' }),
       },
-    });
+    })
   }
 
   return (
@@ -33,5 +31,5 @@ export function SignOutButton({
     >
       Sign out
     </Button>
-  );
+  )
 }

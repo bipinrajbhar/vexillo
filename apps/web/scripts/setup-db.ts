@@ -1,15 +1,13 @@
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-http';
-import { environments } from '../lib/schema';
+import { createDbClient, environments } from '@vexillo/db';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not set. Copy .env.local.example to .env.local and fill it in.');
 }
 
-const db = drizzle(neon(process.env.DATABASE_URL));
+const db = createDbClient(process.env.DATABASE_URL, { max: 1 });
 
 async function seed() {
   console.log('Seeding default environments…');
@@ -26,7 +24,9 @@ async function seed() {
   console.log('Done.');
 }
 
-seed().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+seed()
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  })
+  .finally(() => process.exit(0));

@@ -1,0 +1,128 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Migrate → Build API → Deploy API → Build Web → Upload Web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Node + pnpm (needed for migrations and Vite build) ──────────────────
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── Step 1: Run DB migrations ────────────────────────────────────────────
+      # Must complete before the new API image starts serving traffic.
+      # A failed migration exits non-zero and aborts the rest of the pipeline.
+      - name: Run database migrations
+        run: pnpm --filter @vexillo/db db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # ── AWS credentials (shared for all AWS steps) ───────────────────────────
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ── Step 2: Build Docker image and push to ECR ───────────────────────────
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API image
+        id: build-image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --file apps/api/Dockerfile \
+            --tag "$REGISTRY/$REPOSITORY:$IMAGE_TAG" \
+            --tag "$REGISTRY/$REPOSITORY:latest" \
+            .
+          docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$REPOSITORY:latest"
+          echo "image=$REGISTRY/$REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      # ── Step 3: Trigger App Runner deployment and wait for healthy ───────────
+      # autoDeploymentsEnabled is false in the CDK stack so we trigger manually.
+      - name: Deploy to App Runner
+        id: apprunner-deploy
+        env:
+          SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+        run: |
+          OPERATION_ID=$(aws apprunner start-deployment \
+            --service-arn "$SERVICE_ARN" \
+            --query 'OperationId' \
+            --output text)
+          echo "App Runner deployment triggered: $OPERATION_ID"
+
+      - name: Wait for App Runner service to be running
+        env:
+          SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+        run: |
+          echo "Waiting for App Runner service to reach RUNNING status..."
+          for i in $(seq 1 30); do
+            STATUS=$(aws apprunner describe-service \
+              --service-arn "$SERVICE_ARN" \
+              --query 'Service.Status' \
+              --output text)
+            echo "  attempt $i/30 — status: $STATUS"
+            if [ "$STATUS" = "RUNNING" ]; then
+              echo "App Runner service is RUNNING."
+              exit 0
+            fi
+            if [ "$STATUS" = "OPERATION_IN_PROGRESS" ]; then
+              sleep 15
+              continue
+            fi
+            # Any other status (CREATE_FAILED, DELETE_FAILED, etc.) is fatal.
+            echo "Unexpected App Runner status: $STATUS — aborting."
+            exit 1
+          done
+          echo "Timed out waiting for App Runner service to become RUNNING."
+          exit 1
+
+      # ── Step 4: Build Vite SPA ───────────────────────────────────────────────
+      - name: Build web app
+        run: pnpm --filter @vexillo/web build
+
+      # ── Step 5: Sync dist/ to S3 ─────────────────────────────────────────────
+      - name: Upload web assets to S3
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET_NAME }}
+        run: |
+          aws s3 sync apps/web/dist/ "s3://$S3_BUCKET/" \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "index.html"
+          # index.html must not be cached — CDN serves it for SPA deep links.
+          aws s3 cp apps/web/dist/index.html "s3://$S3_BUCKET/index.html" \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+      # ── Step 6: CloudFront invalidation ──────────────────────────────────────
+      - name: Invalidate CloudFront cache
+        env:
+          DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"

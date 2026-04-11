@@ -119,7 +119,7 @@ describe("VexilloClientProvider — fetch path", () => {
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`${BASE_URL}/api/flags`);
+    expect(url).toBe(`${BASE_URL}/api/sdk/flags`);
     expect((init?.headers as Record<string, string>)?.["Authorization"]).toBe(
       `Bearer ${API_KEY}`,
     );

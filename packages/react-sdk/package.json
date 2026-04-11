@@ -1,6 +1,6 @@
 {
   "name": "@vexillo/react-sdk",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "license": "MIT",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

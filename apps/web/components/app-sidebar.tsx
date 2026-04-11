@@ -1,10 +1,7 @@
-"use client"
+import { Link, useRouterState } from '@tanstack/react-router'
+import { Boxes, Flag, Users } from 'lucide-react'
 
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { Boxes, Flag, Users } from "lucide-react"
-
-import { SignOutButton } from "@/components/sign-out-button"
+import { SignOutButton } from '@/components/sign-out-button'
 import {
   Sidebar,
   SidebarContent,
@@ -15,21 +12,22 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@/components/ui/sidebar"
+} from '@/components/ui/sidebar'
 
 export function AppSidebar({
   session,
 }: {
   session: { user: { email: string; role?: string | null } } | null
 }) {
-  const pathname = usePathname()
-  const isAdmin = session?.user.role === "admin"
+  const { location } = useRouterState()
+  const pathname = location.pathname
+  const isAdmin = session?.user.role === 'admin'
 
   return (
     <Sidebar collapsible="offcanvas" className="bg-sidebar">
       <SidebarHeader className="gap-0 border-b border-sidebar-border px-4 py-5">
         <Link
-          href="/"
+          to="/"
           className="block rounded-sm outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
           <span className="font-heading text-lg font-medium tracking-[-0.02em] text-sidebar-foreground">
@@ -46,9 +44,9 @@ export function AppSidebar({
             <SidebarMenu className="gap-2">
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  isActive={pathname === "/" || pathname.startsWith("/flags/")}
+                  isActive={pathname === '/' || pathname.startsWith('/flags/')}
                   className="px-3 py-2.5"
-                  render={<Link href="/" />}
+                  render={<Link to="/" />}
                 >
                   <Flag className="opacity-80" />
                   <span className="font-medium">Flags</span>
@@ -56,9 +54,9 @@ export function AppSidebar({
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  isActive={pathname.startsWith("/environments")}
+                  isActive={pathname.startsWith('/environments')}
                   className="px-3 py-2.5"
-                  render={<Link href="/environments" />}
+                  render={<Link to="/environments" />}
                 >
                   <Boxes className="opacity-80" />
                   <span className="font-medium">Environments</span>
@@ -67,9 +65,9 @@ export function AppSidebar({
               {isAdmin && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    isActive={pathname.startsWith("/members")}
+                    isActive={pathname.startsWith('/members')}
                     className="px-3 py-2.5"
-                    render={<Link href="/members" />}
+                    render={<Link to="/members" />}
                   >
                     <Users className="opacity-80" />
                     <span className="font-medium">Members</span>

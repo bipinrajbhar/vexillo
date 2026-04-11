@@ -1,10 +1,8 @@
-"use client"
+import * as React from 'react'
+import { ThemeProvider as NextThemesProvider } from 'next-themes'
 
-import * as React from "react"
-import { ThemeProvider as NextThemesProvider } from "next-themes"
-
-import { Toaster } from "@/components/ui/sonner"
-import { TooltipProvider } from "@/components/ui/tooltip"
+import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
