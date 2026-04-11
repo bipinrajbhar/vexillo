@@ -12,6 +12,7 @@ import { AdminOrgsPage } from './routes/admin/index'
 import { AdminOrgsNewPage } from './routes/admin/orgs.new'
 import { AdminOrgDetailPage } from './routes/admin/orgs.$slug'
 import { InviteAcceptPage } from './routes/invite'
+import { OrgSignInPage } from './routes/org-sign-in'
 import { authClient } from '@/lib/auth-client'
 import type { OrgInfo } from '@/lib/org-context'
 
@@ -48,6 +49,13 @@ const indexRoute = createRoute({
   component: WorkspacePage,
 })
 
+// Public: /org/$slug/sign-in — org-specific Okta sign-in (must be above orgRoute)
+const orgSignInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/org/$slug/sign-in',
+  component: OrgSignInPage,
+})
+
 // Org layout: /org/$slug — auth guard + org context loader
 const orgRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -55,7 +63,7 @@ const orgRoute = createRoute({
   beforeLoad: async ({ params, location }) => {
     const { data: session } = await authClient.getSession()
     if (!session) {
-      throw redirect({ to: '/sign-in', search: { next: location.href } })
+      throw redirect({ to: '/org/$slug/sign-in', params: { slug: params.slug }, search: { next: location.href } })
     }
 
     const res = await fetch(`/api/dashboard/${params.slug}/context`)
@@ -139,6 +147,7 @@ export const routeTree = rootRoute.addChildren([
   signInRoute,
   inviteRoute,
   indexRoute,
+  orgSignInRoute,
   orgRoute.addChildren([flagsRoute, flagDetailRoute, environmentsRoute, membersRoute]),
   adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute]),
 ])

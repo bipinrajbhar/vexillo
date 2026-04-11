@@ -5,6 +5,7 @@ import { createSdkRouter } from './routes/sdk';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createInvitesRouter } from './routes/invites';
+import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createAuth } from './lib/auth';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -67,6 +68,9 @@ app.route(
   '/api/invites',
   createInvitesRouter(db, (headers) => auth.api.getSession({ headers })),
 );
+
+// Per-org Okta OAuth — public routes for tenant sign-in flow
+app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 
 const port = Number(process.env.PORT ?? 3000);
 
