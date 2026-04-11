@@ -43,7 +43,7 @@ const indexRoute = createRoute({
   beforeLoad: async () => {
     const { data: session } = await authClient.getSession()
     if (!session) return
-    if ((session.user as Record<string, unknown>).isSuperAdmin === true) {
+    if ((session?.user as Record<string, unknown>)?.isSuperAdmin === true) {
       throw redirect({ to: '/admin' })
     }
     const res = await fetch('/api/dashboard/me/orgs')
@@ -133,7 +133,7 @@ const adminRoute = createRoute({
     if (!session) {
       throw redirect({ to: '/sign-in', search: { next: location.href } })
     }
-    if ((session.user as Record<string, unknown>).isSuperAdmin !== true) {
+    if ((session?.user as Record<string, unknown>)?.isSuperAdmin !== true) {
       throw redirect({ to: '/' })
     }
   },
