@@ -201,6 +201,34 @@ describe('PATCH /api/dashboard/flags/:key', () => {
   });
 });
 
+// ── DELETE /api/dashboard/flags/:key ───────────────────────────────────────
+
+describe('DELETE /api/dashboard/flags/:key', () => {
+  it('returns 403 for viewer', async () => {
+    const app = makeApp(makeMockDb(), viewerSession);
+    const res = await app.fetch(
+      new Request('http://localhost/api/dashboard/flags/my-flag', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when flag not found', async () => {
+    const app = makeApp(makeMockDb([[/* empty */]]), adminSession);
+    const res = await app.fetch(
+      new Request('http://localhost/api/dashboard/flags/nonexistent', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes flag and returns 204', async () => {
+    const app = makeApp(makeMockDb([[{ id: 'f1' }]]), adminSession);
+    const res = await app.fetch(
+      new Request('http://localhost/api/dashboard/flags/my-flag', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(204);
+  });
+});
+
 // ── POST /api/dashboard/flags/:key/toggle ──────────────────────────────────
 
 describe('POST /api/dashboard/flags/:key/toggle', () => {

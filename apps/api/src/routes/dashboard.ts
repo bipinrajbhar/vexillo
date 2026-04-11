@@ -163,6 +163,19 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     return c.json({ flag: result[0] });
   });
 
+  // DELETE /api/dashboard/flags/:key — delete flag and all its states (admin only)
+  router.delete('/flags/:key', async (c) => {
+    const session = c.get('session');
+    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const key = c.req.param('key');
+
+    const result = await db.delete(flags).where(eq(flags.key, key)).returning({ id: flags.id });
+
+    if (result.length === 0) return c.json({ error: 'Flag not found' }, 404);
+    return c.body(null, 204);
+  });
+
   // POST /api/dashboard/flags/:key/toggle — toggle flag per environment (admin only)
   router.post('/flags/:key/toggle', async (c) => {
     const session = c.get('session');

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, Link } from '@tanstack/react-router'
-import { ArrowLeft, Flag, Pencil, Check, X } from 'lucide-react'
+import { useParams, Link, useNavigate } from '@tanstack/react-router'
+import { ArrowLeft, Flag, Pencil, Check, X, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -9,6 +9,13 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { authClient } from '@/lib/auth-client'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -51,6 +58,16 @@ async function patchFlag(
   const data = await res.json()
   if (!res.ok) throw new Error(data.error ?? 'Failed to update flag')
   return data.flag
+}
+
+async function deleteFlag(key: string): Promise<void> {
+  const res = await fetch(`/api/dashboard/flags/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const data = await res.json()
+    throw new Error(data.error ?? 'Failed to delete flag')
+  }
 }
 
 async function toggleFlag(key: string, environmentId: string): Promise<boolean> {
@@ -169,6 +186,7 @@ function EditableField({
 
 export function FlagDetailPage() {
   const { key } = useParams({ from: '/auth/flags/$key' })
+  const navigate = useNavigate()
   const { data: session } = authClient.useSession()
   const isAdmin = (session?.user as { role?: string | null } | undefined)?.role === 'admin'
 
@@ -176,6 +194,8 @@ export function FlagDetailPage() {
   const [environments, setEnvironments] = useState<Env[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -225,6 +245,18 @@ export function FlagDetailPage() {
     const updated = await patchFlag(key, { description })
     setFlag((prev) => (prev ? { ...prev, description: updated.description } : prev))
     toast.success('Description updated')
+  }
+
+  async function handleDelete() {
+    setDeleting(true)
+    try {
+      await deleteFlag(key)
+      toast.success(`Flag "${flag?.name}" deleted`)
+      navigate({ to: '/' })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete flag')
+      setDeleting(false)
+    }
   }
 
   if (loading) {
@@ -355,7 +387,62 @@ export function FlagDetailPage() {
             </div>
           )}
         </div>
+
+        {/* Danger zone */}
+        {isAdmin && (
+          <div className="surface-card px-5 py-5 sm:px-6">
+            <h2 className="text-[0.8125rem] font-semibold text-destructive mb-3">Danger zone</h2>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Delete this flag</p>
+                <p className="text-[0.75rem] text-muted-foreground mt-0.5">
+                  Permanently removes the flag and all its environment states. This cannot be undone.
+                </p>
+              </div>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setDeleteOpen(true)}
+                className="shrink-0"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={deleteOpen} onOpenChange={(v) => { if (!deleting) setDeleteOpen(v) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete flag?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete <span className="font-medium text-foreground">{flag.name}</span> and
+            remove it from all environments. This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting…' : 'Delete flag'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
