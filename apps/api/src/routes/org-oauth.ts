@@ -215,6 +215,7 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
     const authUrl = new URL(discovery.authorization_endpoint);
     authUrl.searchParams.set('client_id', org.oktaClientId);
     authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('response_mode', 'query'); // force GET redirect, not form_post
     authUrl.searchParams.set('scope', 'openid email profile');
     authUrl.searchParams.set('redirect_uri', callbackUrl);
     authUrl.searchParams.set('state', nonce);
