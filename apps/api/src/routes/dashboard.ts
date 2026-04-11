@@ -278,6 +278,22 @@ export function createDashboardRouter(db: DbClient, getSession: GetSession) {
     return c.json({ environment: result[0] });
   });
 
+  // DELETE /api/dashboard/environments/:id — delete environment (admin only)
+  router.delete('/environments/:id', async (c) => {
+    const session = c.get('session');
+    if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const id = c.req.param('id');
+
+    const result = await db
+      .delete(environments)
+      .where(eq(environments.id, id))
+      .returning({ id: environments.id });
+
+    if (result.length === 0) return c.json({ error: 'Environment not found' }, 404);
+    return c.body(null, 204);
+  });
+
   // POST /api/dashboard/environments/:id/rotate-key — rotate API key (admin only)
   router.post('/environments/:id/rotate-key', async (c) => {
     const session = c.get('session');

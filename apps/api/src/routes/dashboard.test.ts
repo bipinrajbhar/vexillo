@@ -363,6 +363,34 @@ describe('PATCH /api/dashboard/environments/:id', () => {
   });
 });
 
+// ── DELETE /api/dashboard/environments/:id ──────────────────────────────────
+
+describe('DELETE /api/dashboard/environments/:id', () => {
+  it('returns 403 for viewer', async () => {
+    const app = makeApp(makeMockDb(), viewerSession);
+    const res = await app.fetch(
+      new Request('http://localhost/api/dashboard/environments/e1', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when environment not found', async () => {
+    const app = makeApp(makeMockDb([[/* empty */]]), adminSession);
+    const res = await app.fetch(
+      new Request('http://localhost/api/dashboard/environments/gone', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes environment and returns 204', async () => {
+    const app = makeApp(makeMockDb([[{ id: 'e1' }]]), adminSession);
+    const res = await app.fetch(
+      new Request('http://localhost/api/dashboard/environments/e1', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(204);
+  });
+});
+
 // ── POST /api/dashboard/environments/:id/rotate-key ────────────────────────
 
 describe('POST /api/dashboard/environments/:id/rotate-key', () => {
