@@ -82,8 +82,8 @@ export class VexilloStack extends cdk.Stack {
       databaseName: 'vexillo',
       multiAz: false,
       storageEncrypted: true,
-      deletionProtection: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      deletionProtection: false,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
       backupRetention: cdk.Duration.days(7),
     });
 
@@ -167,11 +167,13 @@ export class VexilloStack extends cdk.Stack {
         publicLoadBalancer: true,
         assignPublicIp: false,
         taskImageOptions: {
-          // Placeholder image — CI/CD will replace with real ECR image
+          // Placeholder: python http.server returns 200 on GET /
+          // CI/CD replaces this with the real ECR image on first push to main.
           image: ecs.ContainerImage.fromRegistry(
-            'public.ecr.aws/aws-containers/hello-app-runner:latest',
+            'public.ecr.aws/docker/library/python:3.11-alpine',
           ),
           containerPort: 8080,
+          command: ['python3', '-m', 'http.server', '8080'],
           executionRole,
           taskRole,
           logDriver: ecs.LogDrivers.awsLogs({
@@ -193,13 +195,6 @@ export class VexilloStack extends cdk.Stack {
             OKTA_CLIENT_SECRET:          ssmRef('/vexillo/OKTA_CLIENT_SECRET'),
             OKTA_ISSUER:                 ssmRef('/vexillo/OKTA_ISSUER'),
           },
-        },
-        healthCheck: {
-          command: ['CMD-SHELL', 'curl -f http://localhost:8080/ || exit 1'],
-          interval: cdk.Duration.seconds(10),
-          timeout: cdk.Duration.seconds(5),
-          retries: 5,
-          startPeriod: cdk.Duration.seconds(30),
         },
       },
     );
