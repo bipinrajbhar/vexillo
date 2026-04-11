@@ -29,7 +29,7 @@ export async function fetchFlags(
   apiKey: string,
 ): Promise<Record<string, boolean>> {
   try {
-    const res = await fetch(`${baseUrl}/api/flags`, {
+    const res = await fetch(`${baseUrl}/api/sdk/flags`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
 
