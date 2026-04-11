@@ -4,6 +4,16 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      deploy_api:
+        description: 'Force deploy API'
+        type: boolean
+        default: false
+      deploy_web:
+        description: 'Force deploy Web'
+        type: boolean
+        default: false
 
 jobs:
   # ── Detect which apps changed ─────────────────────────────────────────────
@@ -17,15 +27,35 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
         with:
-          filters: |
-            api:
-              - 'apps/api/**'
-              - 'packages/db/**'
-            web:
-              - 'apps/web/**'
+          fetch-depth: 2
+
+      - name: Detect changed paths
+        id: filter
+        env:
+          FORCE_API: ${{ inputs.deploy_api || 'false' }}
+          FORCE_WEB: ${{ inputs.deploy_web || 'false' }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # workflow_dispatch force flags
+          if [ "$FORCE_API" = "true" ]; then echo "api=true" >> $GITHUB_OUTPUT; else
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || [ -z "$BEFORE" ]; then
+              CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "$SHA" 2>/dev/null || echo "")
+            fi
+            echo "api=$(echo "$CHANGED" | grep -qE '^(apps/api|packages/db)/' && echo true || echo false)" >> $GITHUB_OUTPUT
+          fi
+
+          if [ "$FORCE_WEB" = "true" ]; then echo "web=true" >> $GITHUB_OUTPUT; else
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || [ -z "$BEFORE" ]; then
+              CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "$SHA" 2>/dev/null || echo "")
+            fi
+            echo "web=$(echo "$CHANGED" | grep -qE '^apps/web/' && echo true || echo false)" >> $GITHUB_OUTPUT
+          fi
 
   # ── Deploy API ────────────────────────────────────────────────────────────
   deploy-api:
