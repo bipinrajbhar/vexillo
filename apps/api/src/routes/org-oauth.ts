@@ -245,10 +245,23 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
    * BetterAuth's DB, creates a BetterAuth session, and sets the signed
    * `better-auth.session_token` cookie before redirecting the browser to `next`.
    */
-  router.get('/callback', async (c) => {
-    const code = c.req.query('code');
-    const state = c.req.query('state'); // the nonce we sent
-    const error = c.req.query('error');
+  router.on(['GET', 'POST'], '/callback', async (c) => {
+    // Okta sends params via query string (response_mode=query) or POST body
+    // (response_mode=form_post). Support both so either app type works.
+    let code: string | undefined;
+    let state: string | undefined;
+    let error: string | undefined;
+
+    if (c.req.method === 'POST') {
+      const body = await c.req.parseBody();
+      code = body['code'] as string | undefined;
+      state = body['state'] as string | undefined;
+      error = body['error'] as string | undefined;
+    } else {
+      code = c.req.query('code');
+      state = c.req.query('state');
+      error = c.req.query('error');
+    }
 
     const fail = (msg: string) =>
       new Response(null, { status: 302, headers: { Location: `/?error=${encodeURIComponent(msg)}` } });
