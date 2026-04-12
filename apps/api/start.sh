@@ -8,8 +8,13 @@ echo "=== container start: PORT=$PORT NODE_ENV=$NODE_ENV ==="
 
 echo "Running database migrations..."
 cd /app/packages/db
-if ! ./node_modules/.bin/drizzle-kit migrate; then
-  echo "ERROR: drizzle-kit migrate exited with code $?"
+./node_modules/.bin/drizzle-kit migrate > /tmp/migrate.log 2>&1
+MIGRATE_EXIT=$?
+# Print the full output (strips spinner ANSI from CloudWatch)
+cat /tmp/migrate.log
+echo "drizzle-kit exited: $MIGRATE_EXIT"
+if [ "$MIGRATE_EXIT" -ne 0 ]; then
+  echo "ERROR: migrations failed — see output above"
   exit 1
 fi
 echo "Migrations done."
