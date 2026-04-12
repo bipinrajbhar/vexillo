@@ -75,17 +75,10 @@ export function InviteAcceptPage() {
           <>
             <h1 className="text-lg font-semibold">Sign in to accept your invite</h1>
             <p className="text-sm text-muted-foreground">
-              You need to be signed in before accepting this invitation.
+              Sign in through your organisation first, then return to this invite link.
             </p>
-            <Button
-              onClick={() =>
-                navigate({
-                  to: '/sign-in',
-                  search: { next: `/invite?token=${token}` },
-                })
-              }
-            >
-              Sign in
+            <Button onClick={() => navigate({ to: '/' })}>
+              Find your workspace
             </Button>
           </>
         )}

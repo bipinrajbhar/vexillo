@@ -203,9 +203,6 @@ describe('SSM Parameters', () => {
     '/vexillo/BETTER_AUTH_SECRET',
     '/vexillo/BETTER_AUTH_URL',
     '/vexillo/BETTER_AUTH_TRUSTED_ORIGINS',
-    '/vexillo/OKTA_CLIENT_ID',
-    '/vexillo/OKTA_CLIENT_SECRET',
-    '/vexillo/OKTA_ISSUER',
     '/vexillo/SUPER_ADMIN_EMAILS',
   ];
 

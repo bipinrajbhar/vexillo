@@ -78,12 +78,6 @@ export function WorkspacePage() {
             </Button>
           </form>
 
-          <p className="page-enter page-enter-delay-2 mt-5 text-center text-xs text-muted-foreground/70">
-            Need your platform admin?{' '}
-            <a href="/sign-in" className="underline underline-offset-2">
-              Sign in here
-            </a>
-          </p>
         </div>
       </div>
 

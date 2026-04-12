@@ -8,10 +8,7 @@
         "DATABASE_URL",
         "BETTER_AUTH_SECRET",
         "BETTER_AUTH_URL",
-        "BETTER_AUTH_TRUSTED_ORIGINS",
-        "OKTA_CLIENT_ID",
-        "OKTA_CLIENT_SECRET",
-        "OKTA_ISSUER"
+        "BETTER_AUTH_TRUSTED_ORIGINS"
       ]
     },
     "dev": {

@@ -1,6 +1,5 @@
 import { createRootRoute, createRoute, redirect } from '@tanstack/react-router'
 import { RootLayout } from './routes/__root'
-import { SignInPage } from './routes/sign-in'
 import { WorkspacePage } from './routes/index'
 import { OrgLayout } from './routes/org.$slug'
 import { FlagsPage } from './routes/_auth/index'
@@ -20,13 +19,6 @@ import type { OrgInfo } from '@/lib/org-context'
 // Root route — wraps everything in ThemeProvider / Toaster
 const rootRoute = createRootRoute({
   component: RootLayout,
-})
-
-// Public: /sign-in — platform sign-in for super-admins and org members
-const signInRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/sign-in',
-  component: SignInPage,
 })
 
 // Public: /invite — accept an org invite via token
@@ -132,7 +124,7 @@ const adminRoute = createRoute({
   beforeLoad: async ({ location }) => {
     const { data: session } = await authClient.getSession()
     if (!session) {
-      throw redirect({ to: '/sign-in', search: { next: location.href } })
+      throw redirect({ to: '/' })
     }
     if ((session?.user as Record<string, unknown>)?.isSuperAdmin !== true) {
       throw redirect({ to: '/' })
@@ -170,7 +162,6 @@ const adminUsersRoute = createRoute({
 })
 
 export const routeTree = rootRoute.addChildren([
-  signInRoute,
   inviteRoute,
   indexRoute,
   orgSignInRoute,

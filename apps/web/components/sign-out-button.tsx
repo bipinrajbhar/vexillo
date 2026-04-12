@@ -15,7 +15,7 @@ export function SignOutButton({
   async function handleSignOut() {
     await authClient.signOut({
       fetchOptions: {
-        onSuccess: () => navigate({ to: '/sign-in' }),
+        onSuccess: () => navigate({ to: '/' }),
       },
     })
   }

@@ -49,22 +49,7 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 // Per-org Okta OAuth — must be before the BetterAuth catch-all
 app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 
-// Intercept Okta form_post callbacks for the generic OAuth (platform sign-in).
-// BetterAuth's oAuth2Callback endpoint is registered GET-only; if Okta sends a
-// form_post response the POST falls through as 501. This handler converts the
-// POST body to query params and issues a 303 redirect so the browser retries
-// as GET and BetterAuth handles it normally.
-app.post('/api/auth/oauth2/callback/:provider', async (c) => {
-  const body = await c.req.parseBody();
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(body)) {
-    if (typeof v === 'string') params.set(k, v);
-  }
-  const provider = c.req.param('provider');
-  return c.redirect(`/api/auth/oauth2/callback/${provider}?${params}`, 303);
-});
-
-// Auth routes — BetterAuth handles /api/auth/* (Okta OAuth, session)
+// Auth routes — BetterAuth handles /api/auth/* (session)
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable

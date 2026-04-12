@@ -34,9 +34,6 @@ export class VexilloStack extends cdk.Stack {
       '/vexillo/BETTER_AUTH_SECRET',
       '/vexillo/BETTER_AUTH_URL',
       '/vexillo/BETTER_AUTH_TRUSTED_ORIGINS',
-      '/vexillo/OKTA_CLIENT_ID',
-      '/vexillo/OKTA_CLIENT_SECRET',
-      '/vexillo/OKTA_ISSUER',
       '/vexillo/SUPER_ADMIN_EMAILS',
     ] as const;
 
@@ -159,9 +156,6 @@ export class VexilloStack extends cdk.Stack {
           BETTER_AUTH_SECRET:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_SECRET']),
           BETTER_AUTH_URL:             ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_URL']),
           BETTER_AUTH_TRUSTED_ORIGINS: ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_TRUSTED_ORIGINS']),
-          OKTA_CLIENT_ID:              ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_CLIENT_ID']),
-          OKTA_CLIENT_SECRET:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_CLIENT_SECRET']),
-          OKTA_ISSUER:                 ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_ISSUER']),
           SUPER_ADMIN_EMAILS:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/SUPER_ADMIN_EMAILS']),
         },
       },
