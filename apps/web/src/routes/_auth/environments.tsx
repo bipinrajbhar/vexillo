@@ -14,66 +14,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useOrg } from '@/lib/org-context'
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface EnvRow {
-  id: string
-  name: string
-  slug: string
-  allowedOrigins: string[]
-  createdAt: string
-  keyHint: string | null
-}
-
-// ── API helpers ──────────────────────────────────────────────────────────────
-
-async function fetchEnvironments(orgSlug: string): Promise<EnvRow[]> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/environments`)
-  if (!res.ok) throw new Error(`Failed to load environments (${res.status})`)
-  const data = await res.json()
-  return data.environments
-}
-
-async function createEnvironment(orgSlug: string, name: string): Promise<{ environment: EnvRow; apiKey: string }> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/environments`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to create environment')
-  return data
-}
-
-async function deleteEnvironment(orgSlug: string, id: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/environments/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error(data.error ?? 'Failed to delete environment')
-  }
-}
-
-async function rotateKey(orgSlug: string, id: string): Promise<string> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/environments/${encodeURIComponent(id)}/rotate-key`, {
-    method: 'POST',
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to rotate API key')
-  return data.apiKey
-}
-
-async function patchAllowedOrigins(orgSlug: string, id: string, allowedOrigins: string[]): Promise<void> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/environments/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ allowedOrigins }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to update allowed origins')
-}
+import { api, type EnvRow } from '@/lib/api-client'
 
 // ── Create Environment Dialog ────────────────────────────────────────────────
 
@@ -96,7 +37,7 @@ function CreateEnvDialog({
     if (!name.trim()) return
     setSubmitting(true)
     try {
-      const result = await createEnvironment(orgSlug, name.trim())
+      const result = await api.environments.create(orgSlug, name.trim())
       onCreated(result.environment, result.apiKey)
       onOpenChange(false)
       setName('')
@@ -210,7 +151,7 @@ function DeleteEnvDialog({
   async function handleDelete() {
     setDeleting(true)
     try {
-      await deleteEnvironment(orgSlug, env.id)
+      await api.environments.delete(orgSlug, env.id)
       onDeleted(env.id)
       onClose()
       toast.success(`Environment "${env.name}" deleted`)
@@ -279,7 +220,7 @@ function AllowedOriginsEditor({
   async function save(next: string[]) {
     setSaving(true)
     try {
-      await patchAllowedOrigins(orgSlug, env.id, next)
+      await api.environments.patch(orgSlug, env.id, next)
       onUpdated(env.id, next)
     } catch (err) {
       setOrigins(env.allowedOrigins)
@@ -364,7 +305,7 @@ function EnvironmentCard({
   async function handleRotate() {
     setRotating(true)
     try {
-      const key = await rotateKey(orgSlug, env.id)
+      const { apiKey: key } = await api.environments.rotateKey(orgSlug, env.id)
       onRotateKey(key)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to rotate key')
@@ -447,7 +388,7 @@ export function EnvironmentsPage() {
   const load = useCallback(async () => {
     try {
       setError(null)
-      const result = await fetchEnvironments(org.slug)
+      const result = await api.environments.list(org.slug).then((r) => r.environments)
       setEnvs(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load environments')

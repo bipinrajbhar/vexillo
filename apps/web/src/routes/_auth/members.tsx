@@ -21,85 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { authClient } from '@/lib/auth-client'
 import { useOrg } from '@/lib/org-context'
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface Member {
-  id: string
-  name: string
-  email: string
-  role: string
-  createdAt: string
-}
-
-interface Invite {
-  id: string
-  email: string
-  role: string
-  expiresAt: string
-  createdAt: string
-}
-
-// ── API helpers ──────────────────────────────────────────────────────────────
-
-async function fetchMembers(orgSlug: string): Promise<Member[]> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/members`)
-  if (!res.ok) throw new Error(`Failed to load members (${res.status})`)
-  const data = await res.json()
-  return data.members
-}
-
-async function fetchInvites(orgSlug: string): Promise<Invite[]> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/invites`)
-  if (!res.ok) throw new Error(`Failed to load invites (${res.status})`)
-  const data = await res.json()
-  return data.invites
-}
-
-async function createInvite(
-  orgSlug: string,
-  email: string,
-  role: string,
-): Promise<{ id: string; email: string; role: string; expiresAt: string; createdAt: string; token: string }> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/invites`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, role }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to create invite')
-  return data.invite
-}
-
-async function revokeInvite(orgSlug: string, id: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/invites/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error(data.error ?? 'Failed to revoke invite')
-  }
-}
-
-async function patchMemberRole(orgSlug: string, id: string, role: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to update role')
-}
-
-async function deleteMember(orgSlug: string, id: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error(data.error ?? 'Failed to remove member')
-  }
-}
+import { api, type MemberRow as Member, type InviteRow as Invite } from '@/lib/api-client'
 
 // ── Invite Dialog ─────────────────────────────────────────────────────────────
 
@@ -120,7 +42,7 @@ function InviteDialog({
     e.preventDefault()
     setSubmitting(true)
     try {
-      const result = await createInvite(orgSlug, email.trim(), role)
+      const { invite: result } = await api.invites.create(orgSlug, email.trim(), role)
       const { token, ...inviteData } = result
       onCreated(inviteData, token)
       onClose()
@@ -243,7 +165,7 @@ function RemoveMemberDialog({
   async function handleRemove() {
     setRemoving(true)
     try {
-      await deleteMember(orgSlug, member.id)
+      await api.members.delete(orgSlug, member.id)
       onRemoved(member.id)
       onClose()
       toast.success(`${member.name} removed`)
@@ -300,7 +222,7 @@ function MemberRow({
     if (newRole === member.role) return
     setChangingRole(true)
     try {
-      await patchMemberRole(orgSlug, member.id, newRole)
+      await api.members.patch(orgSlug, member.id, newRole)
       onRoleChange(member.id, newRole)
       toast.success(`${member.name} is now a${newRole === 'admin' ? 'n' : ''} ${newRole}`)
     } catch (err) {
@@ -385,7 +307,7 @@ function InviteRow({
   async function handleRevoke() {
     setRevoking(true)
     try {
-      await revokeInvite(orgSlug, invite.id)
+      await api.invites.revoke(orgSlug, invite.id)
       onRevoked(invite.id)
       toast.success(`Invite to ${invite.email} revoked`)
     } catch (err) {
@@ -451,11 +373,11 @@ export function MembersPage() {
     try {
       setError(null)
       const [membersResult, invitesResult] = await Promise.all([
-        fetchMembers(org.slug),
-        fetchInvites(org.slug),
+        api.members.list(org.slug),
+        api.invites.list(org.slug),
       ])
-      setMembers(membersResult)
-      setPendingInvites(invitesResult)
+      setMembers(membersResult.members)
+      setPendingInvites(invitesResult.invites)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load members')
     } finally {

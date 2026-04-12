@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { eq, desc, count } from 'drizzle-orm';
 import { organizations, organizationMembers, authUser } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
-import type { GetSession, Session } from './dashboard';
+import type { GetSession, Session } from '../lib/session';
 
 type Variables = {
   session: Session;

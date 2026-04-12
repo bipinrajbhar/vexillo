@@ -17,60 +17,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useOrg } from '@/lib/org-context'
+import { api, type FlagRow, type EnvRef as Env } from '@/lib/api-client'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface FlagRow {
-  id: string
-  name: string
-  key: string
-  description: string
-  createdAt: string
-  states: Record<string, boolean>
-}
-
-interface Env {
-  id: string
-  name: string
-  slug: string
-}
 
 interface FlagsData {
   flags: FlagRow[]
   environments: Env[]
-}
-
-// ── Data fetching ────────────────────────────────────────────────────────────
-
-async function fetchFlags(orgSlug: string): Promise<FlagsData> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags`)
-  if (!res.ok) throw new Error(`Failed to load flags (${res.status})`)
-  return res.json()
-}
-
-async function createFlag(
-  orgSlug: string,
-  body: { name: string; key: string; description: string },
-): Promise<FlagRow> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to create flag')
-  return data.flag
-}
-
-async function toggleFlag(orgSlug: string, key: string, environmentId: string): Promise<boolean> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ environmentId }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to toggle flag')
-  return data.enabled
 }
 
 // ── Create Flag Dialog ───────────────────────────────────────────────────────
@@ -116,8 +69,8 @@ function CreateFlagDialog({
 
     setSubmitting(true)
     try {
-      const flag = await createFlag(orgSlug, { name: name.trim(), key: key.trim() || slugify(name), description: description.trim() })
-      const data = await fetchFlags(orgSlug)
+      const { flag } = await api.flags.create(orgSlug, { name: name.trim(), key: key.trim() || slugify(name), description: description.trim() })
+      const data = await api.flags.list(orgSlug)
       onCreated(flag, data.environments)
       onOpenChange(false)
       setName('')
@@ -294,7 +247,7 @@ export function FlagsPage() {
   const load = useCallback(async () => {
     try {
       setError(null)
-      const result = await fetchFlags(org.slug)
+      const result = await api.flags.list(org.slug)
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load flags')
@@ -320,7 +273,7 @@ export function FlagsPage() {
       }
     })
 
-    toggleFlag(org.slug, flagKey, envId).then((enabled) => {
+    api.flags.toggle(org.slug, flagKey, envId).then(({ enabled }) => {
       setData((prev) => {
         if (!prev) return prev
         return {

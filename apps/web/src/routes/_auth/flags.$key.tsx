@@ -17,69 +17,15 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useOrg } from '@/lib/org-context'
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface FlagRow {
-  id: string
-  name: string
-  key: string
-  description: string
-  createdAt: string
-  states: Record<string, boolean>
-}
-
-interface Env {
-  id: string
-  name: string
-  slug: string
-}
+import { api, type FlagRow, type EnvRef as Env } from '@/lib/api-client'
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 async function fetchFlagDetail(orgSlug: string, key: string): Promise<{ flag: FlagRow; environments: Env[] }> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags`)
-  if (!res.ok) throw new Error(`Failed to load flags (${res.status})`)
-  const data = await res.json()
-  const flag = (data.flags as FlagRow[]).find((f) => f.key === key)
+  const { flags, environments } = await api.flags.list(orgSlug)
+  const flag = flags.find((f) => f.key === key)
   if (!flag) throw new Error('Flag not found')
-  return { flag, environments: data.environments }
-}
-
-async function patchFlag(
-  orgSlug: string,
-  key: string,
-  body: { name?: string; description?: string },
-): Promise<FlagRow> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to update flag')
-  return data.flag
-}
-
-async function deleteFlag(orgSlug: string, key: string): Promise<void> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const data = await res.json()
-    throw new Error(data.error ?? 'Failed to delete flag')
-  }
-}
-
-async function toggleFlag(orgSlug: string, key: string, environmentId: string): Promise<boolean> {
-  const res = await fetch(`/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ environmentId }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? 'Failed to toggle flag')
-  return data.enabled
+  return { flag, environments }
 }
 
 // ── Inline edit field ────────────────────────────────────────────────────────
@@ -222,7 +168,7 @@ export function FlagDetailPage() {
       prev ? { ...prev, states: { ...prev.states, [envSlug]: !prev.states[envSlug] } } : prev,
     )
 
-    toggleFlag(org.slug, key, envId).then((enabled) => {
+    api.flags.toggle(org.slug, key, envId).then(({ enabled }) => {
       setFlag((prev) =>
         prev ? { ...prev, states: { ...prev.states, [envSlug]: enabled } } : prev,
       )
@@ -235,13 +181,13 @@ export function FlagDetailPage() {
   }
 
   async function handleSaveName(name: string) {
-    const updated = await patchFlag(org.slug, key, { name })
+    const { flag: updated } = await api.flags.patch(org.slug, key, { name })
     setFlag((prev) => (prev ? { ...prev, name: updated.name } : prev))
     toast.success('Name updated')
   }
 
   async function handleSaveDescription(description: string) {
-    const updated = await patchFlag(org.slug, key, { description })
+    const { flag: updated } = await api.flags.patch(org.slug, key, { description })
     setFlag((prev) => (prev ? { ...prev, description: updated.description } : prev))
     toast.success('Description updated')
   }
@@ -249,7 +195,7 @@ export function FlagDetailPage() {
   async function handleDelete() {
     setDeleting(true)
     try {
-      await deleteFlag(org.slug, key)
+      await api.flags.delete(org.slug, key)
       toast.success(`Flag "${flag?.name}" deleted`)
       navigate({ to: '/org/$slug/flags', params: { slug: org.slug } })
     } catch (err) {

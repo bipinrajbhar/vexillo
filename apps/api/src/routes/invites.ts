@@ -3,7 +3,7 @@ import { eq, and, isNull, gt } from 'drizzle-orm';
 import { invites, organizationMembers } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
-import type { GetSession } from './dashboard';
+import type { GetSession } from '../lib/session';
 
 export function createInvitesRouter(db: DbClient, getSession: GetSession) {
   const router = new Hono();
