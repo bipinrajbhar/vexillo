@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { eq } from 'drizzle-orm';
-import { organizations } from '@vexillo/db';
+import { organizations, authUser } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import type { Auth } from '../lib/auth';
 
@@ -345,6 +345,27 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
       userId = newUser.id;
     }
 
+    // Auto-promote to super admin if email is listed in SUPER_ADMIN_EMAILS.
+    // Idempotent: setting isSuperAdmin = true on an already-promoted user is a no-op.
+    const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS ?? '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    const emailMatchesSuperAdmin =
+      superAdminEmails.length > 0 && superAdminEmails.includes(userInfo.email.toLowerCase());
+
+    if (emailMatchesSuperAdmin) {
+      await db.update(authUser).set({ isSuperAdmin: true }).where(eq(authUser.id, userId));
+    }
+
+    // Super admins go to /admin; everyone else goes to the requested next URL.
+    // Covers: (a) just-promoted via email match, (b) pre-existing super admin.
+    const existingIsSuperAdmin =
+      existing != null &&
+      (existing.user as Record<string, unknown>).isSuperAdmin === true;
+    const redirectTarget =
+      emailMatchesSuperAdmin || existingIsSuperAdmin ? '/admin' : parsed.next || '/';
+
     // Create BetterAuth session
     const session = await ctx.internalAdapter.createSession(userId);
 
@@ -364,7 +385,7 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
     });
 
     const headers = new Headers({
-      Location: parsed.next || '/',
+      Location: redirectTarget,
     });
     headers.append('Set-Cookie', sessionCookieHeader);
     headers.append('Set-Cookie', clearStateCookie);

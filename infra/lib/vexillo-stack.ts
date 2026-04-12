@@ -37,6 +37,7 @@ export class VexilloStack extends cdk.Stack {
       '/vexillo/OKTA_CLIENT_ID',
       '/vexillo/OKTA_CLIENT_SECRET',
       '/vexillo/OKTA_ISSUER',
+      '/vexillo/SUPER_ADMIN_EMAILS',
     ] as const;
 
     const ssmParams: Record<string, ssm.StringParameter> = {};
@@ -161,6 +162,7 @@ export class VexilloStack extends cdk.Stack {
           OKTA_CLIENT_ID:              ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_CLIENT_ID']),
           OKTA_CLIENT_SECRET:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_CLIENT_SECRET']),
           OKTA_ISSUER:                 ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_ISSUER']),
+          SUPER_ADMIN_EMAILS:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/SUPER_ADMIN_EMAILS']),
         },
       },
     });

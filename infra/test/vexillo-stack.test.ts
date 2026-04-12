@@ -206,6 +206,7 @@ describe('SSM Parameters', () => {
     '/vexillo/OKTA_CLIENT_ID',
     '/vexillo/OKTA_CLIENT_SECRET',
     '/vexillo/OKTA_ISSUER',
+    '/vexillo/SUPER_ADMIN_EMAILS',
   ];
 
   it.each(requiredParams)('creates SSM parameter %s', (name) => {

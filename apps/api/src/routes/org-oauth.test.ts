@@ -37,7 +37,7 @@ function makeMockDb(staticResults: unknown[][] = []) {
 const MOCK_SECRET = 'test-secret-for-org-oauth-signing-32ch!';
 
 function makeMockAuth(overrides?: {
-  findUserByEmail?: (email: string) => Promise<{ user: { id: string; email: string; name: string }; accounts: [] } | null>;
+  findUserByEmail?: (email: string) => Promise<{ user: { id: string; email: string; name: string; isSuperAdmin?: boolean }; accounts: [] } | null>;
   createUser?: (user: Record<string, unknown>) => Promise<{ id: string } & Record<string, unknown>>;
   createSession?: (userId: string) => Promise<{ token: string }>;
 }): Auth {
@@ -351,6 +351,193 @@ describe('GET /api/auth/org-oauth/callback', () => {
       expect(createUserCalled).toBe(false);
     } finally {
       fetchSpy.mockRestore();
+    }
+  });
+});
+
+// ── SUPER_ADMIN_EMAILS auto-promotion + post-auth redirect ────────────────────
+
+describe('SUPER_ADMIN_EMAILS auto-promotion and redirect', () => {
+  // Shared fetch mock: returns discovery, token, and userinfo for alice@acme.com
+  function mockFetchForAlice() {
+    return spyOn(globalThis, 'fetch').mockImplementation(
+      (async (url: string | URL | Request) => {
+        const urlStr = String(url);
+        if (urlStr.includes('openid-configuration'))
+          return new Response(JSON.stringify(MOCK_DISCOVERY), { headers: { 'Content-Type': 'application/json' } });
+        if (urlStr.includes('/token'))
+          return new Response(JSON.stringify({ access_token: 'tok', token_type: 'Bearer' }), { headers: { 'Content-Type': 'application/json' } });
+        if (urlStr.includes('/userinfo'))
+          return new Response(JSON.stringify({ sub: 'sub', email: 'alice@acme.com', name: 'Alice' }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response('not found', { status: 404 });
+      }) as unknown as typeof globalThis.fetch,
+    );
+  }
+
+  it('promotes user and redirects to /admin when email matches SUPER_ADMIN_EMAILS', async () => {
+    const { signedCookieForTest, nonce } = await buildTestStateCookie({
+      nonce: 'nonce-promote',
+      orgSlug: 'acme',
+      next: '/org/acme/flags',
+      codeVerifier: 'cv',
+    });
+
+    let fetchSpy = mockFetchForAlice();
+
+    try {
+      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
+      process.env.SUPER_ADMIN_EMAILS = 'alice@acme.com,other@example.com';
+
+      // DB queue: [ACTIVE_ORG for org lookup, [] for update call]
+      const db = makeMockDb([[ACTIVE_ORG], []]);
+      // Track whether the update chain was awaited
+      const originalUpdate = (db as unknown as Record<string, unknown>).update;
+      let capturedUpdate = false;
+      (db as unknown as Record<string, unknown>).update = (...args: unknown[]) => {
+        capturedUpdate = true;
+        return (originalUpdate as (...a: unknown[]) => unknown)(...args);
+      };
+
+      const auth = makeMockAuth({
+        findUserByEmail: async () => null, // new user
+        createUser: async () => ({ id: 'user-alice', email: 'alice@acme.com', name: 'Alice' }),
+        createSession: async () => ({ token: 'sess-tok' }),
+      });
+
+      const app = makeApp(db, auth);
+      const res = await app.fetch(
+        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
+          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+        }),
+      );
+
+      expect(res.status).toBe(302);
+      expect(res.headers.get('Location')).toBe('/admin');
+      expect(capturedUpdate).toBe(true);
+    } finally {
+      fetchSpy.mockRestore();
+      delete process.env.SUPER_ADMIN_EMAILS;
+    }
+  });
+
+  it('does not promote and redirects to next when email does not match SUPER_ADMIN_EMAILS', async () => {
+    const { signedCookieForTest, nonce } = await buildTestStateCookie({
+      nonce: 'nonce-no-promote',
+      orgSlug: 'acme',
+      next: '/org/acme/flags',
+      codeVerifier: 'cv',
+    });
+
+    let fetchSpy = mockFetchForAlice();
+
+    try {
+      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
+      process.env.SUPER_ADMIN_EMAILS = 'notmatch@example.com';
+
+      const db = makeMockDb([[ACTIVE_ORG]]);
+      let updateCalled = false;
+      const originalUpdate = (db as unknown as Record<string, unknown>).update;
+      (db as unknown as Record<string, unknown>).update = (...args: unknown[]) => {
+        updateCalled = true;
+        return (originalUpdate as (...a: unknown[]) => unknown)(...args);
+      };
+
+      const auth = makeMockAuth({
+        findUserByEmail: async () => null,
+        createUser: async () => ({ id: 'user-alice', email: 'alice@acme.com', name: 'Alice' }),
+        createSession: async () => ({ token: 'sess-tok' }),
+      });
+
+      const app = makeApp(db, auth);
+      const res = await app.fetch(
+        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
+          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+        }),
+      );
+
+      expect(res.status).toBe(302);
+      expect(res.headers.get('Location')).toBe('/org/acme/flags');
+      expect(updateCalled).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      delete process.env.SUPER_ADMIN_EMAILS;
+    }
+  });
+
+  it('redirects existing super admin to /admin without email match', async () => {
+    const { signedCookieForTest, nonce } = await buildTestStateCookie({
+      nonce: 'nonce-existing-sa',
+      orgSlug: 'acme',
+      next: '/org/acme/flags',
+      codeVerifier: 'cv',
+    });
+
+    let fetchSpy = mockFetchForAlice();
+
+    try {
+      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
+      // SUPER_ADMIN_EMAILS does not contain alice's email
+      process.env.SUPER_ADMIN_EMAILS = 'someone-else@example.com';
+
+      const auth = makeMockAuth({
+        findUserByEmail: async () => ({
+          user: { id: 'user-alice', email: 'alice@acme.com', name: 'Alice', isSuperAdmin: true },
+          accounts: [],
+        }),
+        createSession: async () => ({ token: 'sess-tok' }),
+      });
+
+      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), auth);
+      const res = await app.fetch(
+        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
+          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+        }),
+      );
+
+      expect(res.status).toBe(302);
+      expect(res.headers.get('Location')).toBe('/admin');
+    } finally {
+      fetchSpy.mockRestore();
+      delete process.env.SUPER_ADMIN_EMAILS;
+    }
+  });
+
+  it('promotion is idempotent — already-super-admin user re-signs in without error', async () => {
+    const { signedCookieForTest, nonce } = await buildTestStateCookie({
+      nonce: 'nonce-idem',
+      orgSlug: 'acme',
+      next: '/',
+      codeVerifier: 'cv',
+    });
+
+    let fetchSpy = mockFetchForAlice();
+
+    try {
+      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
+      process.env.SUPER_ADMIN_EMAILS = 'alice@acme.com';
+
+      // DB: org lookup + update call
+      const db = makeMockDb([[ACTIVE_ORG], []]);
+      const auth = makeMockAuth({
+        findUserByEmail: async () => ({
+          user: { id: 'user-alice', email: 'alice@acme.com', name: 'Alice', isSuperAdmin: true },
+          accounts: [],
+        }),
+        createSession: async () => ({ token: 'sess-tok' }),
+      });
+
+      const app = makeApp(db, auth);
+      const res = await app.fetch(
+        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
+          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+        }),
+      );
+
+      expect(res.status).toBe(302);
+      expect(res.headers.get('Location')).toBe('/admin');
+    } finally {
+      fetchSpy.mockRestore();
+      delete process.env.SUPER_ADMIN_EMAILS;
     }
   });
 });
