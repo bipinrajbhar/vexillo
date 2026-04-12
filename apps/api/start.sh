@@ -2,8 +2,9 @@
 set -e
 
 echo "Running database migrations..."
-cd /app
-bunx drizzle-kit migrate --config packages/db/drizzle.config.ts
+cd /app/packages/db
+./node_modules/.bin/drizzle-kit migrate
 
 echo "Starting API server..."
-exec bun run src/index.ts
+cd /app
+exec bun run apps/api/src/index.ts
