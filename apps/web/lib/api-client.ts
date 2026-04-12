@@ -28,14 +28,6 @@ export type MemberRow = {
   createdAt: string
 }
 
-export type InviteRow = {
-  id: string
-  email: string
-  role: string
-  expiresAt: string
-  createdAt: string
-}
-
 // ── Error ─────────────────────────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -138,22 +130,6 @@ export const api = {
 
     delete: (orgSlug: string, userId: string) =>
       call<void>(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(userId)}`, {
-        method: 'DELETE',
-      }),
-  },
-
-  invites: {
-    list: (orgSlug: string) =>
-      call<{ invites: InviteRow[] }>(`/api/dashboard/${orgSlug}/invites`),
-
-    create: (orgSlug: string, email: string, role: string) =>
-      call<{ invite: InviteRow & { token: string } }>(`/api/dashboard/${orgSlug}/invites`, {
-        method: 'POST',
-        ...json({ email, role }),
-      }),
-
-    revoke: (orgSlug: string, id: string) =>
-      call<void>(`/api/dashboard/${orgSlug}/invites/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       }),
   },

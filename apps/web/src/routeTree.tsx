@@ -11,7 +11,6 @@ import { AdminOrgsPage } from './routes/admin/index'
 import { AdminOrgsNewPage } from './routes/admin/orgs.new'
 import { AdminOrgDetailPage } from './routes/admin/orgs.$slug'
 import { AdminUsersPage } from './routes/admin/users'
-import { InviteAcceptPage } from './routes/invite'
 import { OrgSignInPage } from './routes/org-sign-in'
 import { authClient } from '@/lib/auth-client'
 import type { OrgInfo } from '@/lib/org-context'
@@ -19,13 +18,6 @@ import type { OrgInfo } from '@/lib/org-context'
 // Root route — wraps everything in ThemeProvider / Toaster
 const rootRoute = createRootRoute({
   component: RootLayout,
-})
-
-// Public: /invite — accept an org invite via token
-const inviteRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/invite',
-  component: InviteAcceptPage,
 })
 
 // Public: / — "find your workspace" slug entry form
@@ -159,7 +151,6 @@ const adminUsersRoute = createRoute({
 })
 
 export const routeTree = rootRoute.addChildren([
-  inviteRoute,
   indexRoute,
   orgSignInRoute,
   orgRoute.addChildren([flagsRoute, flagDetailRoute, environmentsRoute, membersRoute]),

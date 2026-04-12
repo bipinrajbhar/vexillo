@@ -9,6 +9,5 @@ export type { InferSelectModel, InferInsertModel } from 'drizzle-orm';
 export * from './queries/flags';
 export * from './queries/environments';
 export * from './queries/members';
-export * from './queries/invites';
 export * from './queries/orgs';
 export * from './queries/sdk';

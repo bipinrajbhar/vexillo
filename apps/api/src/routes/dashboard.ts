@@ -252,48 +252,5 @@ export function createDashboardRouter(service: DashboardService, getSession: Get
     }
   });
 
-  // ── Invites ───────────────────────────────────────────────────────────────────
-
-  router.post('/:orgSlug/invites', async (c) => {
-    const org = c.get('org');
-    const session = c.get('session')!;
-    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
-
-    const body = await c.req.json();
-    const email: string = body.email?.trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return c.json({ error: 'Valid email is required' }, 400);
-    }
-
-    try {
-      const invite = await service.createInvite(org.id, session.user.id, {
-        email,
-        role: body.role,
-      });
-      return c.json({ invite }, 201);
-    } catch (err) {
-      return handleServiceError(err, c) ?? (() => { throw err; })();
-    }
-  });
-
-  router.get('/:orgSlug/invites', async (c) => {
-    const org = c.get('org');
-    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
-    const invites = await service.getPendingInvites(org.id);
-    return c.json({ invites });
-  });
-
-  router.delete('/:orgSlug/invites/:id', async (c) => {
-    const org = c.get('org');
-    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
-
-    try {
-      await service.revokeInvite(org.id, c.req.param('id'));
-      return c.body(null, 204);
-    } catch (err) {
-      return handleServiceError(err, c) ?? (() => { throw err; })();
-    }
-  });
-
   return router;
 }

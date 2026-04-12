@@ -20,19 +20,12 @@ import {
   countOrgAdmins,
   updateMemberRole,
   removeMember,
-  queryPendingInvites,
-  deletePendingInviteByEmail,
-  insertInvite,
-  revokeInvite,
   type FlagWithStates,
   type EnvRef,
   type EnvironmentWithKey,
   type MemberRow,
-  type InviteRow,
   organizations,
-  authUser,
 } from '@vexillo/db';
-import { eq } from 'drizzle-orm';
 import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
 
 // ── Domain errors ──────────────────────────────────────────────────────────────
@@ -72,14 +65,6 @@ function slugify(name: string): string {
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-function generateInviteToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 // ── Interface ──────────────────────────────────────────────────────────────────
@@ -129,14 +114,6 @@ export interface DashboardService {
   updateMemberRole(orgId: string, userId: string, role: string): Promise<{ userId: string; role: string }>;
   removeMember(orgId: string, userId: string): Promise<void>;
 
-  // Invites
-  getPendingInvites(orgId: string): Promise<InviteRow[]>;
-  createInvite(
-    orgId: string,
-    invitedByUserId: string,
-    input: { email: string; role: string },
-  ): Promise<InviteRow & { token: string }>;
-  revokeInvite(orgId: string, inviteId: string): Promise<void>;
 }
 
 // ── Implementation ─────────────────────────────────────────────────────────────
@@ -275,45 +252,5 @@ export function createDashboardService(db: DbClient): DashboardService {
       await removeMember(db, orgId, userId);
     },
 
-    // ── Invites ───────────────────────────────────────────────────────────────
-
-    async getPendingInvites(orgId) {
-      return queryPendingInvites(db, orgId);
-    },
-
-    async createInvite(orgId, invitedByUserId, { email, role }) {
-      if (role !== 'admin' && role !== 'viewer') {
-        throw new PreconditionError('Role must be admin or viewer');
-      }
-      // Block if user already exists (one-user-one-tenant invariant)
-      const [existing] = await db
-        .select({ id: authUser.id })
-        .from(authUser)
-        .where(eq(authUser.email, email))
-        .limit(1);
-      if (existing) throw new ConflictError('User already has an account');
-
-      // Invalidate any existing pending invite (resend flow)
-      await deletePendingInviteByEmail(db, orgId, email);
-
-      const rawToken = generateInviteToken();
-      const tokenHash = await hashKey(rawToken);
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-      const invite = await insertInvite(db, orgId, {
-        invitedByUserId,
-        email,
-        tokenHash,
-        role,
-        expiresAt,
-      });
-
-      return { ...invite, token: rawToken };
-    },
-
-    async revokeInvite(orgId, inviteId) {
-      const deleted = await revokeInvite(db, orgId, inviteId);
-      if (!deleted) throw new NotFoundError('Invite not found');
-    },
   };
 }

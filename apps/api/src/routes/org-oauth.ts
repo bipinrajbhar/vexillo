@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { eq } from 'drizzle-orm';
-import { organizations, authUser } from '@vexillo/db';
+import { organizations, authUser, organizationMembers } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import type { Auth } from '../lib/auth';
 
@@ -357,6 +357,12 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
     if (emailMatchesSuperAdmin) {
       await db.update(authUser).set({ isSuperAdmin: true }).where(eq(authUser.id, userId));
     }
+
+    // JIT provisioning — add user to org on first sign-in (idempotent)
+    await db
+      .insert(organizationMembers)
+      .values({ orgId: org.id, userId, role: 'viewer' })
+      .onConflictDoNothing();
 
     const redirectTarget = parsed.next || '/';
 
