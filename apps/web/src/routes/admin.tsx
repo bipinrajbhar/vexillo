@@ -1,10 +1,24 @@
-import { Link, Outlet } from '@tanstack/react-router'
+import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { Flag } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { ModeToggle } from '@/components/mode-toggle'
 import { SignOutButton } from '@/components/sign-out-button'
 
+const NAV_TABS = [
+  { label: 'Organizations', to: '/admin' as const, matchPrefix: '/admin/orgs' },
+  { label: 'Super Admins', to: '/admin/users' as const, matchPrefix: '/admin/users' },
+]
+
 export function AdminLayout() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+
+  function isActive(to: string, matchPrefix: string) {
+    if (to === '/admin') {
+      return pathname === '/admin' || pathname.startsWith(matchPrefix)
+    }
+    return pathname === to || pathname.startsWith(matchPrefix)
+  }
+
   return (
     <div className="min-h-dvh flex flex-col bg-background">
       <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/80">
@@ -28,6 +42,22 @@ export function AdminLayout() {
           <ModeToggle />
           <SignOutButton className="text-muted-foreground text-sm" />
         </div>
+        <nav className="flex gap-1 px-5 sm:px-8 -mb-px">
+          {NAV_TABS.map((tab) => (
+            <Link
+              key={tab.to}
+              to={tab.to}
+              className={[
+                'px-1 py-2.5 text-sm border-b-2 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm',
+                isActive(tab.to, tab.matchPrefix)
+                  ? 'border-foreground text-foreground font-medium'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              ].join(' ')}
+            >
+              {tab.label}
+            </Link>
+          ))}
+        </nav>
       </header>
       <main className="main-canvas flex-1">
         <Outlet />

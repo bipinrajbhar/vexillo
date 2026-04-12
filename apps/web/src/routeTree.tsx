@@ -11,6 +11,7 @@ import { AdminLayout } from './routes/admin'
 import { AdminOrgsPage } from './routes/admin/index'
 import { AdminOrgsNewPage } from './routes/admin/orgs.new'
 import { AdminOrgDetailPage } from './routes/admin/orgs.$slug'
+import { AdminUsersPage } from './routes/admin/users'
 import { InviteAcceptPage } from './routes/invite'
 import { OrgSignInPage } from './routes/org-sign-in'
 import { authClient } from '@/lib/auth-client'
@@ -161,11 +162,18 @@ const adminOrgDetailRoute = createRoute({
   component: AdminOrgDetailPage,
 })
 
+// /admin/users — super admin management
+const adminUsersRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/users',
+  component: AdminUsersPage,
+})
+
 export const routeTree = rootRoute.addChildren([
   signInRoute,
   inviteRoute,
   indexRoute,
   orgSignInRoute,
   orgRoute.addChildren([flagsRoute, flagDetailRoute, environmentsRoute, membersRoute]),
-  adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute]),
+  adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute, adminUsersRoute]),
 ])

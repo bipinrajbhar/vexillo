@@ -163,6 +163,21 @@ export function createSuperAdminRouter(db: DbClient, getSession: GetSession) {
 
   // ── Users ────────────────────────────────────────────────────────────────────
 
+  // GET /api/superadmin/users — list all super admin users
+  router.get('/users', async (c) => {
+    const users = await db
+      .select({
+        id: authUser.id,
+        name: authUser.name,
+        email: authUser.email,
+        createdAt: authUser.createdAt,
+      })
+      .from(authUser)
+      .where(eq(authUser.isSuperAdmin, true))
+      .orderBy(authUser.email);
+    return c.json({ users });
+  });
+
   // PATCH /api/superadmin/users/:userId — promote or demote a user's super admin status
   router.patch('/users/:userId', async (c) => {
     const session = c.get('session');

@@ -340,6 +340,36 @@ describe('DELETE /api/superadmin/orgs/:slug', () => {
   });
 });
 
+// ── GET /api/superadmin/users ────────────────────────────────────────────────
+
+describe('GET /api/superadmin/users', () => {
+  it('returns empty list when no super admins', async () => {
+    const app = makeApp(makeMockDb([[]]), superSession);
+    const res = await app.fetch(new Request(`${BASE}/users`));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { users: unknown[] };
+    expect(body.users).toHaveLength(0);
+  });
+
+  it('returns super admin users', async () => {
+    const users = [
+      { id: 'u-super', name: 'Super Admin', email: 'super@example.com', createdAt: new Date() },
+    ];
+    const app = makeApp(makeMockDb([users]), superSession);
+    const res = await app.fetch(new Request(`${BASE}/users`));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { users: { id: string }[] };
+    expect(body.users).toHaveLength(1);
+    expect(body.users[0].id).toBe('u-super');
+  });
+
+  it('returns 403 for non-super-admin', async () => {
+    const app = makeApp(makeMockDb(), regularSession);
+    const res = await app.fetch(new Request(`${BASE}/users`));
+    expect(res.status).toBe(403);
+  });
+});
+
 // ── PATCH /api/superadmin/users/:userId ──────────────────────────────────────
 
 describe('PATCH /api/superadmin/users/:userId', () => {
