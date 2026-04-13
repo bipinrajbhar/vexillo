@@ -67,6 +67,9 @@ const orgRoute = createRoute({
     }
 
     const res = await fetch(`/api/dashboard/${params.slug}/context`)
+    if (res.status === 401) {
+      throw redirect({ to: '/org/$slug/sign-in', params: { slug: params.slug }, search: { next: location.href } })
+    }
     if (res.status === 403 || res.status === 404) {
       throw redirect({ to: '/' })
     }
