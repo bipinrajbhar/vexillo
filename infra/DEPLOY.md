@@ -103,7 +103,7 @@ script via ECS Exec from inside the running API container (after the first deplo
 ```sh
 TASK_ARN=$(aws ecs list-tasks --cluster vexillo --service-name vexillo-api --query 'taskArns[0]' --output text)
 
-aws ecs execute-command --cluster vexillo --task "$TASK_ARN" --container api --interactive --command "bun run apps/api/scripts/seed-org.ts 'Acme Corp' acme https://acme.okta.com/oauth2/default <clientId> <clientSecret>"
+aws ecs execute-command --cluster vexillo --task "$TASK_ARN" --container web --interactive --command "bun run apps/api/scripts/seed-org.ts 'Acme Corp' acme https://acme.okta.com/oauth2/default <clientId> <clientSecret>"
 ```
 
 The environment variables (`DATABASE_URL`, `OKTA_SECRET_KEY`) are already injected into the
