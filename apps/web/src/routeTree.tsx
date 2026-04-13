@@ -75,6 +75,13 @@ const orgRoute = createRoute({
     }
     if (!res.ok) throw new Error(`Failed to load org context (${res.status})`)
 
+    // CloudFront converts API 403/404 → 200 + index.html (SPA fallback).
+    // Detect that substitution via Content-Type before attempting JSON.parse.
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!contentType.includes('application/json')) {
+      throw redirect({ to: '/' })
+    }
+
     const data = await res.json() as { org: OrgInfo; role: string }
     return data  // augments route context with { org, role }
   },
