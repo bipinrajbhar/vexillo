@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { Plus, RefreshCw, Trash2, X, Check, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -445,21 +444,6 @@ export function EnvironmentsPage() {
           role="alert"
         >
           {error}
-        </div>
-      )}
-
-      {loading && (
-        <div className="table-shell divide-y divide-border">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-5 py-4 sm:px-6">
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="h-3 w-28" />
-              </div>
-              <Skeleton className="h-8 w-24 rounded-md" />
-              <Skeleton className="h-8 w-8 rounded-md" />
-            </div>
-          ))}
         </div>
       )}
 

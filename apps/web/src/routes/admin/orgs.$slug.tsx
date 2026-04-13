@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -207,38 +206,7 @@ export function AdminOrgDetailPage() {
   }
 
   if (loading) {
-    return (
-      <div className="page-container page-container-wide page-enter">
-        <div className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <Skeleton className="mb-1.5 h-3 w-20" />
-            <Skeleton className="h-8 w-72 max-w-full md:h-9" />
-            <Skeleton className="mt-2 h-4 w-full max-w-lg" />
-            <div className="mt-3 flex gap-3">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-4 w-24" />
-            </div>
-          </div>
-          <Skeleton className="h-10 w-44 shrink-0 rounded-md" />
-        </div>
-        <div className="table-shell divide-y divide-border">
-          <div className="border-b border-border bg-muted/45 px-5 py-3 dark:bg-muted/15">
-            <Skeleton className="h-3 w-40" />
-          </div>
-          <div className="space-y-4 px-5 py-5 sm:px-6">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-          </div>
-          <div className="border-b border-border bg-muted/45 px-5 py-3 dark:bg-muted/15">
-            <Skeleton className="h-3 w-36" />
-          </div>
-          <div className="space-y-4 px-5 py-5 sm:px-6">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-          </div>
-        </div>
-      </div>
-    )
+    return null
   }
 
   if (error || !org) {

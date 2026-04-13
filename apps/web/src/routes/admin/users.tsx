@@ -3,7 +3,6 @@ import { UserMinus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -147,22 +146,6 @@ export function AdminUsersPage() {
           role="alert"
         >
           {error}
-        </div>
-      )}
-
-      {loading && (
-        <div className="table-shell divide-y divide-border">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-5 py-4 sm:px-6">
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-3 w-32" />
-              </div>
-              <Skeleton className="hidden h-5 w-12 rounded-full sm:block" />
-              <Skeleton className="hidden h-3.5 w-20 sm:block" />
-              <Skeleton className="h-8 w-8 rounded-md" />
-            </div>
-          ))}
         </div>
       )}
 

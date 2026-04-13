@@ -4,7 +4,6 @@ import { ArrowLeft, Flag, Pencil, Check, X, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
@@ -205,15 +204,7 @@ export function FlagDetailPage() {
   }
 
   if (loading) {
-    return (
-      <div className="page-container page-container-narrow">
-        <Skeleton className="h-4 w-20 mb-8" />
-        <div className="space-y-3">
-          <Skeleton className="h-7 w-48" />
-          <Skeleton className="h-4 w-64" />
-        </div>
-      </div>
-    )
+    return null
   }
 
   if (error || !flag) {

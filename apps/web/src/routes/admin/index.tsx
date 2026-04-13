@@ -5,7 +5,6 @@ import { toast } from 'sonner'
 import { AdminNewOrgDialog } from '@/components/admin-new-org-dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -160,23 +159,6 @@ export function AdminOrgsPage() {
           role="alert"
         >
           {error}
-        </div>
-      )}
-
-      {/* Loading */}
-      {loading && (
-        <div className="table-shell divide-y divide-border">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-5 py-4 sm:px-6">
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-4 w-36" />
-                <Skeleton className="h-3 w-24" />
-              </div>
-              <Skeleton className="hidden h-5 w-16 rounded-full sm:block" />
-              <Skeleton className="hidden h-3.5 w-20 sm:block" />
-              <Skeleton className="h-8 w-8 rounded-md" />
-            </div>
-          ))}
         </div>
       )}
 

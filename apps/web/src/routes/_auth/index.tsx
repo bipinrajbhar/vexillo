@@ -4,7 +4,6 @@ import { Plus, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -362,22 +361,6 @@ export function FlagsPage() {
           role="alert"
         >
           {error}
-        </div>
-      )}
-
-      {loading && (
-        <div className="table-shell divide-y divide-border">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-5 py-4 sm:px-6">
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="h-3 w-28" />
-              </div>
-              <Skeleton className="h-5 w-9 rounded-full" />
-              <Skeleton className="h-5 w-9 rounded-full" />
-              <Skeleton className="h-8 w-8 rounded-md" />
-            </div>
-          ))}
         </div>
       )}
 
