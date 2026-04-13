@@ -66,13 +66,6 @@ export function createSuperAdminRouter(db: DbClient, getSession: GetSession) {
         .insert(organizations)
         .values({ name, slug, oktaClientId, oktaClientSecret: await encryptSecret(oktaClientSecret), oktaIssuer })
         .returning();
-
-      // Auto-add the creating super admin as an org admin
-      await db
-        .insert(organizationMembers)
-        .values({ orgId: org.id, userId: c.get('session').user.id, role: 'admin' })
-        .onConflictDoNothing();
-
       return c.json({ org: { ...org, oktaClientSecret } }, 201);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '';
