@@ -47,8 +47,9 @@ Each organisation authenticates users through its own Okta application. You need
 4. Configure the app:
    - **App integration name**: anything descriptive (e.g. `Vexillo`)
    - **Grant types**: ensure **Authorization Code** is checked
-   - **Sign-in redirect URIs**: add your CloudFront callback URL:
+   - **Sign-in redirect URIs**: add **both** of the following (one for local dev, one for production):
      ```
+     http://localhost:3000/api/auth/org-oauth/callback
      https://<your-cloudfront-url>/api/auth/org-oauth/callback
      ```
      To find your CloudFront URL:
