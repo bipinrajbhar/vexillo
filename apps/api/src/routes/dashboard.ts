@@ -6,6 +6,7 @@ import type {
   NotFoundError,
   ConflictError,
   PreconditionError,
+  ForbiddenError,
 } from '../services/dashboard-service';
 
 export type { GetSession } from '../lib/session';
@@ -26,6 +27,7 @@ function handleServiceError(
     if (code === 'NOT_FOUND') return c.json({ error: err.message }, 404) as Response;
     if (code === 'CONFLICT') return c.json({ error: err.message }, 409) as Response;
     if (code === 'PRECONDITION') return c.json({ error: err.message }, 400) as Response;
+    if (code === 'FORBIDDEN') return c.json({ error: err.message }, 403) as Response;
   }
   return null;
 }

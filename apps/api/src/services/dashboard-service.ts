@@ -20,6 +20,7 @@ import {
   countOrgAdmins,
   updateMemberRole,
   removeMember,
+  queryUserIsSuperAdmin,
   insertAuditLog,
   type FlagWithStates,
   type EnvRef,
@@ -52,6 +53,14 @@ export class PreconditionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PreconditionError';
+  }
+}
+
+export class ForbiddenError extends Error {
+  readonly code = 'FORBIDDEN' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
   }
 }
 
@@ -238,6 +247,9 @@ export function createDashboardService(db: DbClient): DashboardService {
       if (role !== 'admin' && role !== 'viewer') {
         throw new PreconditionError('Role must be admin or viewer');
       }
+      if (await queryUserIsSuperAdmin(db, userId)) {
+        throw new ForbiddenError('Cannot change role of a super admin');
+      }
       if (role === 'viewer') {
         const [currentRole, adminCount] = await Promise.all([
           queryMemberRole(db, orgId, userId),
@@ -254,6 +266,9 @@ export function createDashboardService(db: DbClient): DashboardService {
     },
 
     async removeMember(orgId, actorId, userId) {
+      if (await queryUserIsSuperAdmin(db, userId)) {
+        throw new ForbiddenError('Cannot remove a super admin from an org');
+      }
       const [currentRole, adminCount] = await Promise.all([
         queryMemberRole(db, orgId, userId),
         countOrgAdmins(db, orgId),

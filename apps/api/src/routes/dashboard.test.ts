@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { createDashboardRouter } from './dashboard';
 import type { GetSession, Session } from './dashboard';
 import type { DashboardService, OrgRow } from '../services/dashboard-service';
-import { NotFoundError, ConflictError, PreconditionError } from '../services/dashboard-service';
+import { NotFoundError, ConflictError, PreconditionError, ForbiddenError } from '../services/dashboard-service';
 
 // ── Session fixtures ─────────────────────────────────────────────────────────
 
@@ -614,6 +614,22 @@ describe('PATCH /api/dashboard/:orgSlug/members/:userId', () => {
     expect(res.status).toBe(403);
   });
 
+  it('returns 403 when targeting a super admin', async () => {
+    const app = makeApp(
+      adminService({ updateMemberRole: async () => { throw new ForbiddenError('Cannot change role of a super admin'); } }),
+      adminSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/members/u-superadmin`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'viewer' }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Cannot change role of a super admin' });
+  });
+
   it('returns 400 for invalid role', async () => {
     const app = makeApp(
       adminService({ updateMemberRole: async () => { throw new PreconditionError('Role must be admin or viewer'); } }),
@@ -683,6 +699,18 @@ describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
       new Request(`${BASE}/members/gone`, { method: 'DELETE' }),
     );
     expect(res.status).toBe(404);
+  });
+
+  it('returns 403 when targeting a super admin', async () => {
+    const app = makeApp(
+      adminService({ removeMember: async () => { throw new ForbiddenError('Cannot remove a super admin from an org'); } }),
+      adminSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/members/u-superadmin`, { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Cannot remove a super admin from an org' });
   });
 
   it('returns 409 when removing the last admin', async () => {

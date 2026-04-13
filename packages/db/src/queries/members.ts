@@ -2,6 +2,15 @@ import { eq, and, asc } from 'drizzle-orm';
 import { organizationMembers, authUser } from '../schema';
 import type { DbClient } from '../client';
 
+export async function queryUserIsSuperAdmin(db: DbClient, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ isSuperAdmin: authUser.isSuperAdmin })
+    .from(authUser)
+    .where(eq(authUser.id, userId))
+    .limit(1);
+  return row?.isSuperAdmin ?? false;
+}
+
 export type MemberRow = {
   id: string;
   name: string;
