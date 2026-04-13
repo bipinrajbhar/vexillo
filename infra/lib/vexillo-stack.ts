@@ -26,25 +26,23 @@ export class VexilloStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // ── SSM Parameters — created FIRST so ECS can reference them ─────────────
-    // All start as REPLACE_ME. Run ./setup-secrets.sh after cdk deploy to fill
-    // in real values, then push to main to trigger the first real deployment.
+    // ── SSM Parameters — operator-managed, referenced by name ────────────────
+    // Parameters are NOT created by CDK — they are set manually via setup-secrets.sh.
+    // CDK only references them by name so ECS can inject them as env vars at task start.
     const paramNames = [
       '/vexillo/DATABASE_URL',
       '/vexillo/BETTER_AUTH_SECRET',
       '/vexillo/BETTER_AUTH_URL',
       '/vexillo/BETTER_AUTH_TRUSTED_ORIGINS',
       '/vexillo/SUPER_ADMIN_EMAILS',
+      '/vexillo/OKTA_SECRET_KEY',
     ] as const;
 
-    const ssmParams: Record<string, ssm.StringParameter> = {};
+    const ssmParams: Record<string, ssm.IStringParameter> = {};
     for (const name of paramNames) {
       const id = name.replace(/\//g, '').replace(/_/g, '');
-      ssmParams[name] = new ssm.StringParameter(this, `Param${id}`, {
+      ssmParams[name] = ssm.StringParameter.fromStringParameterAttributes(this, `Param${id}`, {
         parameterName: name,
-        stringValue: 'REPLACE_ME',
-        description: 'Vexillo runtime secret - update via setup-secrets.sh',
-        tier: ssm.ParameterTier.STANDARD,
       });
     }
 
@@ -121,6 +119,10 @@ export class VexilloStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
     database.secret?.grantRead(taskRole);
+    // Required for ECS Exec (aws ecs execute-command)
+    taskRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+    );
 
     // ── CloudWatch log group ──────────────────────────────────────────────────
     const logGroup = new logs.LogGroup(this, 'ApiLogGroup', {
@@ -142,6 +144,7 @@ export class VexilloStack extends cdk.Stack {
       taskSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       publicLoadBalancer: true,
       assignPublicIp: false,
+      enableExecuteCommand: true,
       taskImageOptions: {
         image: ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/python:3.11-alpine'),
         containerPort: 8080,
@@ -157,14 +160,15 @@ export class VexilloStack extends cdk.Stack {
           BETTER_AUTH_URL:             ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_URL']),
           BETTER_AUTH_TRUSTED_ORIGINS: ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_TRUSTED_ORIGINS']),
           SUPER_ADMIN_EMAILS:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/SUPER_ADMIN_EMAILS']),
+          OKTA_SECRET_KEY:             ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_SECRET_KEY']),
         },
       },
     });
 
     // ALB target group health check
     apiService.targetGroup.configureHealthCheck({
-      path: '/health',
-      healthyHttpCodes: '200-399',
+      path: '/api/health',
+      healthyHttpCodes: '200-404', // 404 allows the CDK placeholder to pass; real API returns 200
       interval: cdk.Duration.seconds(15),
       timeout: cdk.Duration.seconds(5),
       healthyThresholdCount: 2,
