@@ -29,22 +29,27 @@ export class VexilloStack extends cdk.Stack {
     // ── SSM Parameters — operator-managed, referenced by name ────────────────
     // Parameters are NOT created by CDK — they are set manually via setup-secrets.sh.
     // CDK only references them by name so ECS can inject them as env vars at task start.
-    const paramNames = [
+    // String-type SSM parameters
+    const stringParamNames = [
       '/vexillo/DATABASE_URL',
       '/vexillo/BETTER_AUTH_SECRET',
       '/vexillo/BETTER_AUTH_URL',
       '/vexillo/BETTER_AUTH_TRUSTED_ORIGINS',
       '/vexillo/SUPER_ADMIN_EMAILS',
-      '/vexillo/OKTA_SECRET_KEY',
     ] as const;
 
     const ssmParams: Record<string, ssm.IStringParameter> = {};
-    for (const name of paramNames) {
+    for (const name of stringParamNames) {
       const id = name.replace(/\//g, '').replace(/_/g, '');
       ssmParams[name] = ssm.StringParameter.fromStringParameterAttributes(this, `Param${id}`, {
         parameterName: name,
       });
     }
+
+    // SecureString-type SSM parameter (created with --type SecureString)
+    const oktaSecretKeyParam = ssm.StringParameter.fromSecureStringParameterAttributes(
+      this, 'ParamvexilloOKTASECRETKEY', { parameterName: '/vexillo/OKTA_SECRET_KEY' },
+    );
 
     // ── VPC ──────────────────────────────────────────────────────────────────
     const vpc = new ec2.Vpc(this, 'Vpc', {
@@ -112,6 +117,7 @@ export class VexilloStack extends cdk.Stack {
     for (const param of Object.values(ssmParams)) {
       param.grantRead(executionRole);
     }
+    oktaSecretKeyParam.grantRead(executionRole);
 
     // ── Task role (runtime: Secrets Manager for RDS credentials) ─────────────
     const taskRole = new iam.Role(this, 'TaskRole', {
@@ -160,7 +166,7 @@ export class VexilloStack extends cdk.Stack {
           BETTER_AUTH_URL:             ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_URL']),
           BETTER_AUTH_TRUSTED_ORIGINS: ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_TRUSTED_ORIGINS']),
           SUPER_ADMIN_EMAILS:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/SUPER_ADMIN_EMAILS']),
-          OKTA_SECRET_KEY:             ecs.Secret.fromSsmParameter(ssmParams['/vexillo/OKTA_SECRET_KEY']),
+          OKTA_SECRET_KEY:             ecs.Secret.fromSsmParameter(oktaSecretKeyParam),
         },
       },
     });
