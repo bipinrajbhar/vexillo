@@ -29,8 +29,49 @@ CloudFront (HTTPS)
 - [AWS CDK](https://docs.aws.amazon.com/cdk/latest/guide/getting_started.html) v2 (`npm i -g aws-cdk`)
 - [Node.js](https://nodejs.org) ≥ 20
 - [pnpm](https://pnpm.io) ≥ 10
+- [Bun](https://bun.sh) ≥ 1.x
 - [GitHub CLI](https://cli.github.com) (`gh`) for setting Actions secrets
 - An AWS account with sufficient IAM permissions (see [IAM policy](#iam-policy))
+
+---
+
+## Okta Setup
+
+Each organisation authenticates users through its own Okta application. You need to create one Okta app per organisation before users can sign in.
+
+### Create an Okta OIDC application
+
+1. Sign in to your Okta admin console (e.g. `https://your-org-admin.okta.com`)
+2. Go to **Applications → Applications → Create App Integration**
+3. Choose **OIDC – OpenID Connect**, then **Web Application**
+4. Configure the app:
+   - **App integration name**: anything descriptive (e.g. `Vexillo`)
+   - **Grant types**: ensure **Authorization Code** is checked
+   - **Sign-in redirect URIs**: add **both** of the following (one for local dev, one for production):
+     ```
+     http://localhost:3000/api/auth/org-oauth/callback
+     https://<your-cloudfront-url>/api/auth/org-oauth/callback
+     ```
+     To find your CloudFront URL:
+     ```sh
+     aws cloudformation describe-stacks --stack-name VexilloStack \
+       --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontUrl`].OutputValue' \
+       --output text
+     ```
+   - **Assignments**: set to the users or groups that should have access
+5. Save. Note the **Client ID** and **Client Secret** — you'll need them when seeding the organisation.
+
+### Issuer URL
+
+Use the authorization server issuer, not the org domain. The default authorization server URL is:
+
+```
+https://<your-okta-domain>/oauth2/default
+```
+
+For example: `https://acme.okta.com/oauth2/default`
+
+Do **not** use just `https://acme.okta.com` — the discovery endpoint (`/.well-known/openid-configuration`) won't resolve correctly without the `/oauth2/default` path.
 
 ---
 
@@ -38,13 +79,7 @@ CloudFront (HTTPS)
 
 ### Prerequisites
 
-- [AWS CLI](https://aws.amazon.com/cli/) configured (`aws configure`)
-- [AWS CDK](https://docs.aws.amazon.com/cdk/latest/guide/getting_started.html) v2 (`npm i -g aws-cdk`)
-- [Node.js](https://nodejs.org) ≥ 20
-- [pnpm](https://pnpm.io) ≥ 10
-- [Bun](https://bun.sh) ≥ 1.x
-- [GitHub CLI](https://cli.github.com) (`gh`) for setting Actions secrets
-- An AWS account with sufficient IAM permissions (see [IAM policy](#iam-policy))
+See [Prerequisites](#prerequisites) above.
 
 ### 1. Run setup
 

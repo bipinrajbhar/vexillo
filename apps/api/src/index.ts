@@ -44,8 +44,10 @@ app.use(
 );
 
 // Health check — ALB target group uses "/" (CF default), also expose "/health"
+// and "/api/health" (the path CloudFront forwards after stripping nothing from /api/*)
 app.get('/', (c) => c.json({ status: 'ok' }));
 app.get('/health', (c) => c.json({ status: 'ok' }));
+app.get('/api/health', (c) => c.json({ status: 'ok' }));
 
 // Per-org Okta OAuth — must be before the BetterAuth catch-all
 app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));

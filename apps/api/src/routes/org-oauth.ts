@@ -366,11 +366,23 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
       await db.update(authUser).set({ isSuperAdmin: true }).where(eq(authUser.id, userId));
     }
 
-    // JIT provisioning — add user to org on first sign-in (idempotent)
-    await db
-      .insert(organizationMembers)
-      .values({ orgId: org.id, userId, role: 'viewer' })
-      .onConflictDoNothing();
+    // JIT provisioning — add user to org on first sign-in.
+    // Super admins get admin role and are upgraded on every sign-in (upsert).
+    // Regular users are inserted as viewer only if not already a member.
+    if (emailMatchesSuperAdmin) {
+      await db
+        .insert(organizationMembers)
+        .values({ orgId: org.id, userId, role: 'admin' })
+        .onConflictDoUpdate({
+          target: [organizationMembers.orgId, organizationMembers.userId],
+          set: { role: 'admin' },
+        });
+    } else {
+      await db
+        .insert(organizationMembers)
+        .values({ orgId: org.id, userId, role: 'viewer' })
+        .onConflictDoNothing();
+    }
 
     const redirectTarget = parsed.next || '/';
 
