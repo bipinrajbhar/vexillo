@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useParams } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,6 +46,7 @@ export function AdminNewOrgDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const navigate = useNavigate()
+  const { slug: contextSlug } = useParams({ strict: false }) as { slug: string }
   const [name, setName] = useState('')
   const [slug, setSlug] = useState('')
   const [slugEdited, setSlugEdited] = useState(false)
@@ -101,7 +102,7 @@ export function AdminNewOrgDialog({
       })
       toast.success(`"${name.trim()}" created`)
       onOpenChange(false)
-      navigate({ to: '/admin/orgs/$slug', params: { slug: org.slug } })
+      navigate({ to: '/org/$slug/admin/orgs/$orgSlug', params: { slug: contextSlug, orgSlug: org.slug } })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create organization')
     } finally {

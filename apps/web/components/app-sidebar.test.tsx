@@ -20,9 +20,12 @@ vi.mock('@/components/ui/sidebar', () => ({
   SidebarGroupContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SidebarHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SidebarMenu: ({ children }: { children: React.ReactNode }) => <ul>{children}</ul>,
-  SidebarMenuButton: ({ children, render: renderProp }: { children: React.ReactNode; render?: { props: { to?: string } }; isActive?: boolean; className?: string }) => {
+  SidebarMenuButton: ({ children, render: renderProp }: { children: React.ReactNode; render?: React.ReactElement; isActive?: boolean; className?: string }) => {
     if (renderProp) {
-      return <a href={renderProp.props.to ?? '#'}>{children}</a>
+      const to: string = renderProp.props.to ?? '#'
+      const params: Record<string, string> | undefined = renderProp.props.params
+      const href = params ? to.replace(/\$(\w+)/g, (_, k) => params[k] ?? '') : to
+      return <a href={href}>{children}</a>
     }
     return <button>{children}</button>
   },
@@ -34,26 +37,32 @@ vi.mock('@/components/sign-out-button', () => ({
 }))
 
 describe('AppSidebar', () => {
-  it('does not show Admin link when isSuperAdmin is false', () => {
+  it('does not show admin links when isSuperAdmin is false', () => {
     render(
       <AppSidebar org={mockOrg} role="viewer" userEmail="user@example.com" isSuperAdmin={false} />
     )
-    expect(screen.queryByText('Admin')).toBeNull()
+    expect(screen.queryByText('Organizations')).toBeNull()
+    expect(screen.queryByText('Administrators')).toBeNull()
   })
 
-  it('does not show Admin link when isSuperAdmin is omitted', () => {
+  it('does not show admin links when isSuperAdmin is omitted', () => {
     render(
       <AppSidebar org={mockOrg} role="viewer" userEmail="user@example.com" />
     )
-    expect(screen.queryByText('Admin')).toBeNull()
+    expect(screen.queryByText('Organizations')).toBeNull()
+    expect(screen.queryByText('Administrators')).toBeNull()
   })
 
-  it('shows Admin link linking to /admin when isSuperAdmin is true', () => {
+  it('shows Organizations and Administrators links when isSuperAdmin is true', () => {
     render(
       <AppSidebar org={mockOrg} role="viewer" userEmail="user@example.com" isSuperAdmin={true} />
     )
-    const link = screen.getByRole('link', { name: /admin/i })
-    expect(link).toBeInTheDocument()
-    expect(link).toHaveAttribute('href', '/admin')
+    const orgsLink = screen.getByRole('link', { name: /organizations/i })
+    expect(orgsLink).toBeInTheDocument()
+    expect(orgsLink).toHaveAttribute('href', '/org/acme/admin')
+
+    const adminsLink = screen.getByRole('link', { name: /administrators/i })
+    expect(adminsLink).toBeInTheDocument()
+    expect(adminsLink).toHaveAttribute('href', '/org/acme/admin/users')
   })
 })

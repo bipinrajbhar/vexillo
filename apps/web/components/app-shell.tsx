@@ -21,6 +21,9 @@ function headerTitle(pathname: string): string {
   if (pathname.match(/^\/org\/[^/]+\/environments$/)) return 'Environments'
   if (pathname.match(/^\/org\/[^/]+\/members$/)) return 'Members'
   if (pathname.match(/^\/org\/[^/]+\/settings$/)) return 'Settings'
+  if (pathname.match(/^\/org\/[^/]+\/admin\/users/)) return 'Administrators'
+  if (pathname.match(/^\/org\/[^/]+\/admin\/orgs\/[^/]+/)) return 'Organization'
+  if (pathname.match(/^\/org\/[^/]+\/admin/)) return 'Organizations'
   return 'Vexillo'
 }
 

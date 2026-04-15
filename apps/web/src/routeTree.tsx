@@ -6,7 +6,6 @@ import { FlagsPage } from './routes/_auth/index'
 import { FlagDetailPage } from './routes/_auth/flags.$key'
 import { EnvironmentsPage } from './routes/_auth/environments'
 import { MembersPage } from './routes/_auth/members'
-import { AdminLayout } from './routes/admin'
 import { AdminOrgsPage } from './routes/admin/index'
 import { AdminOrgsNewPage } from './routes/admin/orgs.new'
 import { AdminOrgDetailPage } from './routes/admin/orgs.$slug'
@@ -116,44 +115,40 @@ const membersRoute = createRoute({
   component: MembersPage,
 })
 
-// Admin layout: /admin — super-admin guard
+// Super-admin guard: /org/$slug/admin — nested under orgRoute (inherits session + org context)
 const adminRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => orgRoute,
   path: '/admin',
-  beforeLoad: async ({ location }) => {
+  beforeLoad: async ({ params }) => {
     const { data: session } = await authClient.getSession()
-    if (!session) {
-      throw redirect({ to: '/' })
-    }
     if ((session?.user as Record<string, unknown>)?.isSuperAdmin !== true) {
-      throw redirect({ to: '/' })
+      throw redirect({ to: '/org/$slug/flags', params: { slug: params.slug } })
     }
   },
-  component: AdminLayout,
 })
 
-// /admin (index) — org list (?newOrg=1 opens create dialog)
+// /org/$slug/admin (index) — org list (?newOrg=1 opens create dialog)
 const adminIndexRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/',
   component: AdminOrgsPage,
 })
 
-// /admin/orgs/new — create org
+// /org/$slug/admin/orgs/new — create org
 const adminOrgsNewRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/orgs/new',
   component: AdminOrgsNewPage,
 })
 
-// /admin/orgs/$slug — org detail
+// /org/$slug/admin/orgs/$orgSlug — org detail
 const adminOrgDetailRoute = createRoute({
   getParentRoute: () => adminRoute,
-  path: '/orgs/$slug',
+  path: '/orgs/$orgSlug',
   component: AdminOrgDetailPage,
 })
 
-// /admin/users — super admin management
+// /org/$slug/admin/users — super admin management
 const adminUsersRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/users',
@@ -163,6 +158,11 @@ const adminUsersRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   orgSignInRoute,
-  orgRoute.addChildren([flagsRoute, flagDetailRoute, environmentsRoute, membersRoute]),
-  adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute, adminUsersRoute]),
+  orgRoute.addChildren([
+    flagsRoute,
+    flagDetailRoute,
+    environmentsRoute,
+    membersRoute,
+    adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute, adminUsersRoute]),
+  ]),
 ])

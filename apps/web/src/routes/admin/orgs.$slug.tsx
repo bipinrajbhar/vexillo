@@ -100,7 +100,7 @@ async function deleteOrg(slug: string): Promise<void> {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function AdminOrgDetailPage() {
-  const { slug } = useParams({ strict: false }) as { slug: string }
+  const { slug, orgSlug } = useParams({ strict: false }) as { slug: string; orgSlug: string }
   const navigate = useNavigate()
 
   const [org, setOrg] = useState<OrgDetail | null>(null)
@@ -122,7 +122,7 @@ export function AdminOrgDetailPage() {
   const load = useCallback(async () => {
     try {
       setError(null)
-      const result = await fetchOrg(slug)
+      const result = await fetchOrg(orgSlug)
       setOrg(result)
       setName(result.name)
       setEditSlug(result.slug)
@@ -134,7 +134,7 @@ export function AdminOrgDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [slug])
+  }, [orgSlug])
 
   useEffect(() => {
     load()
@@ -145,7 +145,7 @@ export function AdminOrgDetailPage() {
     if (!org) return
     setSaving(true)
     try {
-      const updated = await patchOrg(org.slug, {
+      const updated = await patchOrg(orgSlug, {
         name: name.trim(),
         slug: editSlug.trim(),
         oktaClientId: oktaClientId.trim(),
@@ -154,8 +154,8 @@ export function AdminOrgDetailPage() {
       })
       setOrg((prev) => (prev ? { ...prev, ...updated } : prev))
       toast.success('Organization updated')
-      if (updated.slug !== org.slug) {
-        navigate({ to: '/admin/orgs/$slug', params: { slug: updated.slug } })
+      if (updated.slug !== orgSlug) {
+        navigate({ to: '/org/$slug/admin/orgs/$orgSlug', params: { slug, orgSlug: updated.slug } })
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update organization')
@@ -168,7 +168,7 @@ export function AdminOrgDetailPage() {
     if (!org) return
     setSuspending(true)
     try {
-      const status = await suspendOrg(org.slug)
+      const status = await suspendOrg(orgSlug)
       setOrg((prev) => (prev ? { ...prev, status } : prev))
       toast.success('Organization suspended')
     } catch (err) {
@@ -182,7 +182,7 @@ export function AdminOrgDetailPage() {
     if (!org) return
     setSuspending(true)
     try {
-      const status = await unsuspendOrg(org.slug)
+      const status = await unsuspendOrg(orgSlug)
       setOrg((prev) => (prev ? { ...prev, status } : prev))
       toast.success('Organization unsuspended')
     } catch (err) {
@@ -196,9 +196,9 @@ export function AdminOrgDetailPage() {
     if (!org) return
     setDeleting(true)
     try {
-      await deleteOrg(org.slug)
+      await deleteOrg(orgSlug)
       toast.success(`"${org.name}" deleted`)
-      navigate({ to: '/admin' })
+      navigate({ to: '/org/$slug/admin', params: { slug } })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete organization')
       setDeleting(false)
@@ -221,7 +221,8 @@ export function AdminOrgDetailPage() {
             </p>
           </div>
           <Link
-            to="/admin"
+            to="/org/$slug/admin"
+            params={{ slug }}
             className={cn(
               buttonVariants({ variant: 'outline', size: 'default' }),
               'gap-2 shadow-surface-xs',
@@ -264,7 +265,8 @@ export function AdminOrgDetailPage() {
           </p>
         </div>
         <Link
-          to="/admin"
+          to="/org/$slug/admin"
+          params={{ slug }}
           className={cn(
             buttonVariants({ variant: 'outline', size: 'default' }),
             'gap-2 shadow-surface-xs',

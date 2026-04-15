@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link, useLocation, useNavigate } from '@tanstack/react-router'
+import { Link, useLocation, useNavigate, useParams } from '@tanstack/react-router'
 import { Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminNewOrgDialog } from '@/components/admin-new-org-dialog'
@@ -98,6 +98,7 @@ function DeleteOrgDialog({
 export function AdminOrgsPage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { slug } = useParams({ strict: false }) as { slug: string }
   const [orgs, setOrgs] = useState<OrgRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -125,7 +126,7 @@ export function AdminOrgsPage() {
     const flag = q.get('newOrg')
     if (flag === '1' || flag === 'true') {
       setNewOrgOpen(true)
-      navigate({ to: '/admin', replace: true })
+      navigate({ to: '/org/$slug/admin', params: { slug }, replace: true })
     }
   }, [location.search, navigate])
 
@@ -195,8 +196,8 @@ export function AdminOrgsPage() {
             >
               <div className="min-w-0">
                 <Link
-                  to="/admin/orgs/$slug"
-                  params={{ slug: org.slug }}
+                  to="/org/$slug/admin/orgs/$orgSlug"
+                  params={{ slug, orgSlug: org.slug }}
                   className="data-table-primary-label text-[0.9375rem] hover:underline focus-visible:underline"
                 >
                   {org.name}

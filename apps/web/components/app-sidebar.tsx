@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Boxes, Flag, Shield, Users } from 'lucide-react'
+import { Boxes, Building2, Flag, Shield, Users } from 'lucide-react'
 
 import { SignOutButton } from '@/components/sign-out-button'
 import {
@@ -91,16 +91,31 @@ export function AppSidebar({
                 </SidebarMenuItem>
               )}
               {isSuperAdmin && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname.startsWith('/admin')}
-                    className="px-3 py-2.5"
-                    render={<Link to="/admin" />}
-                  >
-                    <Shield className="opacity-80" />
-                    <span className="font-medium">Admin</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                <>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={
+                        pathname === `/org/${slug}/admin` ||
+                        pathname.startsWith(`/org/${slug}/admin/orgs`)
+                      }
+                      className="px-3 py-2.5"
+                      render={<Link to="/org/$slug/admin" params={{ slug }} />}
+                    >
+                      <Building2 className="opacity-80" />
+                      <span className="font-medium">Organizations</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={pathname.startsWith(`/org/${slug}/admin/users`)}
+                      className="px-3 py-2.5"
+                      render={<Link to="/org/$slug/admin/users" params={{ slug }} />}
+                    >
+                      <Shield className="opacity-80" />
+                      <span className="font-medium">Administrators</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </>
               )}
             </SidebarMenu>
           </SidebarGroupContent>
