@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -430,12 +431,10 @@ export function AdminOrgDetailPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete organization?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete <strong>{org.name}</strong> and all its flags, environments, and members. This cannot be undone.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will permanently delete{' '}
-            <span className="font-medium text-foreground">{org.name}</span> and
-            all its flags, environments, and members. This cannot be undone.
-          </p>
           <DialogFooter>
             <Button
               variant="outline"

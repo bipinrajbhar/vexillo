@@ -1,5 +1,5 @@
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
-import { flags, environments, flagStates } from '../schema';
+import { flags, environments, flagStates, authUser } from '../schema';
 import type { DbClient } from '../client';
 
 export type FlagWithStates = {
@@ -8,6 +8,7 @@ export type FlagWithStates = {
   key: string;
   description: string;
   createdAt: Date;
+  createdByName: string | null;
   states: Record<string, boolean>;
 };
 
@@ -27,6 +28,7 @@ export async function queryOrgFlagsWithStates(
         key: flags.key,
         description: flags.description,
         createdAt: flags.createdAt,
+        createdByName: authUser.name,
         envSlug: environments.slug,
         enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
       })
@@ -36,6 +38,7 @@ export async function queryOrgFlagsWithStates(
         flagStates,
         and(eq(flagStates.flagId, flags.id), eq(flagStates.environmentId, environments.id)),
       )
+      .leftJoin(authUser, eq(authUser.id, flags.createdByUserId))
       .where(and(eq(flags.orgId, orgId), eq(environments.orgId, orgId)))
       .orderBy(desc(flags.createdAt), asc(environments.name)),
     db
@@ -54,6 +57,7 @@ export async function queryOrgFlagsWithStates(
         key: row.key,
         description: row.description,
         createdAt: row.createdAt,
+        createdByName: row.createdByName ?? null,
         states: {},
       });
     }
@@ -75,6 +79,7 @@ export async function queryFlagByKey(
       key: flags.key,
       description: flags.description,
       createdAt: flags.createdAt,
+      createdByName: authUser.name,
       envSlug: environments.slug,
       envName: environments.name,
       environmentId: environments.id,
@@ -86,6 +91,7 @@ export async function queryFlagByKey(
       flagStates,
       and(eq(flagStates.flagId, flags.id), eq(flagStates.environmentId, environments.id)),
     )
+    .leftJoin(authUser, eq(authUser.id, flags.createdByUserId))
     .where(and(eq(flags.key, key), eq(flags.orgId, orgId)))
     .orderBy(asc(environments.name));
 
@@ -106,6 +112,7 @@ export async function queryFlagByKey(
       key: first.key,
       description: first.description,
       createdAt: first.createdAt,
+      createdByName: first.createdByName ?? null,
       states,
     },
     rollout,
@@ -115,11 +122,11 @@ export async function queryFlagByKey(
 export async function insertFlag(
   db: DbClient,
   orgId: string,
-  input: { name: string; key: string; description: string },
+  input: { name: string; key: string; description: string; createdByUserId?: string },
 ): Promise<typeof flags.$inferSelect> {
   const [flag] = await db
     .insert(flags)
-    .values({ orgId, name: input.name, key: input.key, description: input.description })
+    .values({ orgId, name: input.name, key: input.key, description: input.description, createdByUserId: input.createdByUserId })
     .returning();
   return flag;
 }

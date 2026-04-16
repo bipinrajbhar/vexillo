@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -55,10 +56,10 @@ function RemoveMemberDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Remove member?</DialogTitle>
+          <DialogDescription>
+            <strong>{member.name}</strong> ({member.email}) will lose access immediately.
+          </DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          <strong>{member.name}</strong> ({member.email}) will lose access immediately.
-        </p>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={removing}>
             Cancel

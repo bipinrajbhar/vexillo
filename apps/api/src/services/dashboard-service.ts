@@ -159,7 +159,7 @@ export function createDashboardService(db: DbClient): DashboardService {
       const key = input.key?.trim() || slugify(input.name);
       if (!key) throw new PreconditionError('Invalid key');
       try {
-        const flag = await insertFlag(db, orgId, { name: input.name, key, description: input.description });
+        const flag = await insertFlag(db, orgId, { name: input.name, key, description: input.description, createdByUserId: actorId });
         await backfillFlagStatesForFlag(db, flag.id, envIds.map((e) => e.id));
         await insertAuditLog(db, { orgId, actorId, action: 'flag.create', targetType: 'flag', targetId: flag.id, metadata: { name: flag.name, key: flag.key } });
         return flag;

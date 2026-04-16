@@ -106,6 +106,7 @@ export const flags = pgTable('flags', {
   name: text('name').notNull(),
   key: text('key').notNull(),
   description: text('description').notNull().default(''),
+  createdByUserId: text('created_by_user_id').references(() => authUser.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   unique('flags_org_id_key_unique').on(table.orgId, table.key),
