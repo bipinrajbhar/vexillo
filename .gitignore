@@ -16,6 +16,9 @@ coverage
 .next/
 out/
 
+# vite
+.vite
+
 # production
 build
 dist
