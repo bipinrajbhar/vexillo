@@ -3,7 +3,6 @@ import { RootLayout } from './routes/__root'
 import { WorkspacePage } from './routes/index'
 import { OrgLayout } from './routes/org.$slug'
 import { FlagsPage } from './routes/_auth/index'
-import { FlagDetailPage } from './routes/_auth/flags.$key'
 import { EnvironmentsPage } from './routes/_auth/environments'
 import { MembersPage } from './routes/_auth/members'
 import { AdminOrgsPage } from './routes/admin/index'
@@ -94,13 +93,6 @@ const flagsRoute = createRoute({
   component: FlagsPage,
 })
 
-// Protected: /org/$slug/flags/$key — flag detail
-const flagDetailRoute = createRoute({
-  getParentRoute: () => orgRoute,
-  path: '/flags/$key',
-  component: FlagDetailPage,
-})
-
 // Protected: /org/$slug/environments
 const environmentsRoute = createRoute({
   getParentRoute: () => orgRoute,
@@ -160,7 +152,6 @@ export const routeTree = rootRoute.addChildren([
   orgSignInRoute,
   orgRoute.addChildren([
     flagsRoute,
-    flagDetailRoute,
     environmentsRoute,
     membersRoute,
     adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute, adminUsersRoute]),

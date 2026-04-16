@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, type FormEvent } from 'react'
-import { Link } from '@tanstack/react-router'
 import { Plus, Search, ChevronDown, MoreHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -40,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
@@ -52,6 +52,163 @@ import {
 import { useOrg } from '@/lib/org-context'
 import { api, type FlagRow, type EnvRef as Env } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
+
+// ── Edit Flag Dialog ─────────────────────────────────────────────────────────
+
+function EditFlagDialog({
+  flag,
+  orgSlug,
+  open,
+  onOpenChange,
+  onSuccess,
+}: {
+  flag: FlagRow | null
+  orgSlug: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSuccess: () => void
+}) {
+  const [name, setName] = useState(flag?.name ?? '')
+  const [description, setDescription] = useState(flag?.description ?? '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (flag) {
+      setName(flag.name)
+      setDescription(flag.description)
+    }
+  }, [flag])
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!flag || !name.trim()) return
+    setSaving(true)
+    try {
+      await api.flags.patch(orgSlug, flag.key, {
+        name: name.trim(),
+        description: description.trim(),
+      })
+      onSuccess()
+      onOpenChange(false)
+      toast.success('Flag updated')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update flag')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!saving) onOpenChange(v) }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit flag</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-flag-name">Name</Label>
+            <Input
+              id="edit-flag-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-flag-description">
+              Description
+            </Label>
+            <Textarea
+              id="edit-flag-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What does this flag control?"
+              rows={3}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving || !name.trim()}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Rollout Dialog ───────────────────────────────────────────────────────────
+
+function RolloutDialog({
+  flag,
+  orgSlug,
+  environments,
+  isAdmin,
+  open,
+  onOpenChange,
+  onToggle,
+}: {
+  flag: FlagRow | null
+  orgSlug: string
+  environments: Env[]
+  isAdmin: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onToggle: () => void
+}) {
+  const [states, setStates] = useState<Record<string, boolean>>(flag?.states ?? {})
+
+  useEffect(() => {
+    if (flag) setStates(flag.states)
+  }, [flag])
+
+  function handleToggle(envId: string, envSlug: string) {
+    if (!flag) return
+    const next = !states[envSlug]
+    setStates((prev) => ({ ...prev, [envSlug]: next }))
+    api.flags.toggle(orgSlug, flag.key, envId)
+      .then(({ enabled }) => {
+        setStates((prev) => ({ ...prev, [envSlug]: enabled }))
+        onToggle()
+      })
+      .catch((err) => {
+        setStates((prev) => ({ ...prev, [envSlug]: !next }))
+        toast.error(err instanceof Error ? err.message : 'Failed to toggle flag')
+      })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Rollout</DialogTitle>
+        </DialogHeader>
+        {environments.length === 0 ? (
+          <p className="py-4 text-sm text-muted-foreground text-center">No environments yet.</p>
+        ) : (
+          <div className="divide-y divide-border -mx-4 border-t">
+            {environments.map((env) => (
+              <div key={env.id} className="flex items-center justify-between px-4 py-3.5">
+                <p className="text-sm font-medium">{env.name}</p>
+                <Switch
+                  checked={!!states[env.slug]}
+                  onCheckedChange={() => handleToggle(env.id, env.slug)}
+                  disabled={!isAdmin}
+                  aria-label={`Toggle ${flag?.name} in ${env.name}`}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        <DialogFooter showCloseButton />
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 // ── Create Flag Dialog ───────────────────────────────────────────────────────
 
@@ -193,6 +350,8 @@ export function FlagsPage() {
 
   const [createOpen, setCreateOpen] = useState(false)
   const [flagToDelete, setFlagToDelete] = useState<FlagRow | null>(null)
+  const [flagToEdit, setFlagToEdit] = useState<FlagRow | null>(null)
+  const [flagToRollout, setFlagToRollout] = useState<FlagRow | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -272,7 +431,7 @@ export function FlagsPage() {
           return isOn === null ? (
             <span className="text-muted-foreground">—</span>
           ) : (
-            <Badge variant={isOn ? 'default' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
+            <Badge variant={isOn ? 'success' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
           )
         },
       },
@@ -293,10 +452,11 @@ export function FlagsPage() {
                   <span className="sr-only">Open menu</span>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem>
-                    <Link to="/org/$slug/flags/$key" params={{ slug: org.slug, key: flag.key }} className="w-full">
-                      Edit
-                    </Link>
+                  <DropdownMenuItem onClick={() => setFlagToEdit(flag)}>
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setFlagToRollout(flag)}>
+                    Rollout
                   </DropdownMenuItem>
                   {isAdmin && (
                     <>
@@ -305,7 +465,7 @@ export function FlagsPage() {
                         variant="destructive"
                         onClick={() => setFlagToDelete(flag)}
                       >
-                        Delete flag
+                        Delete
                       </DropdownMenuItem>
                     </>
                   )}
@@ -466,7 +626,16 @@ export function FlagsPage() {
             </Table>
           </div>
 
-          <div className="flex items-center justify-end py-4">
+          <div className="flex items-center justify-between py-4">
+            <p className="text-xs text-muted-foreground">
+              {(() => {
+                if (filteredFlags.length === 0) return `0 of ${flagsList.length} flags`
+                const { pageIndex, pageSize } = table.getState().pagination
+                const start = pageIndex * pageSize + 1
+                const end = Math.min((pageIndex + 1) * pageSize, filteredFlags.length)
+                return `${start}–${end} of ${flagsList.length} flags`
+              })()}
+            </p>
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -493,6 +662,24 @@ export function FlagsPage() {
         orgSlug={org.slug}
         open={createOpen}
         onOpenChange={setCreateOpen}
+        onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+      />
+
+      <RolloutDialog
+        flag={flagToRollout}
+        orgSlug={org.slug}
+        environments={environments}
+        isAdmin={isAdmin}
+        open={!!flagToRollout}
+        onOpenChange={(v) => { if (!v) setFlagToRollout(null) }}
+        onToggle={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+      />
+
+      <EditFlagDialog
+        flag={flagToEdit}
+        orgSlug={org.slug}
+        open={!!flagToEdit}
+        onOpenChange={(v) => { if (!v) setFlagToEdit(null) }}
         onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
       />
 
