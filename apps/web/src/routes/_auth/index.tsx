@@ -272,7 +272,7 @@ export function FlagsPage() {
           return isOn === null ? (
             <span className="text-muted-foreground">—</span>
           ) : (
-            <Badge variant={isOn ? 'default' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
+            <Badge variant={isOn ? 'success' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
           )
         },
       },
