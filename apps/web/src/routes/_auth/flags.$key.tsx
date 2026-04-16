@@ -245,7 +245,7 @@ export function FlagDetailPage() {
       {/* ── Flag identity card ─────────────────────────────────────────── */}
       <div className="surface-card mb-8 overflow-hidden">
         <div className="px-5 py-5 sm:px-6">
-          <p className="page-eyebrow mb-2">Feature flag</p>
+          <p className="page-eyebrow mb-2">Flag</p>
           <h1 className="page-title mb-1">{flag.name}</h1>
           <code className="inline-block font-mono text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-sm">
             {flag.key}
@@ -301,7 +301,7 @@ export function FlagDetailPage() {
             <h2 className="text-[0.8125rem] font-semibold text-foreground">Environments</h2>
             {!isAdmin && (
               <p className="text-xs text-muted-foreground mt-0.5">
-                View-only — you need admin access to toggle flags.
+                View-only. Admin access required to toggle.
               </p>
             )}
           </div>
@@ -309,11 +309,11 @@ export function FlagDetailPage() {
           {environments.length === 0 ? (
             <div className="px-5 py-8 sm:px-6 text-center">
               <p className="text-sm text-muted-foreground">
-                No environments yet.{' '}
+                No environments.{' '}
                 <Link to="/org/$slug/environments" params={{ slug: org.slug }} className="underline underline-offset-2">
-                  Create one
+                  Add one
                 </Link>{' '}
-                to start using this flag.
+                to start toggling this flag.
               </p>
             </div>
           ) : (
@@ -351,9 +351,9 @@ export function FlagDetailPage() {
             <h2 className="text-[0.8125rem] font-semibold text-destructive mb-3">Danger zone</h2>
             <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-medium text-foreground">Delete this flag</p>
+                <p className="text-sm font-medium text-foreground">Delete flag</p>
                 <p className="text-[0.75rem] text-muted-foreground mt-0.5">
-                  Permanently removes the flag and all its environment states. This cannot be undone.
+                  Removes this flag from all environments. Cannot be undone.
                 </p>
               </div>
               <Button

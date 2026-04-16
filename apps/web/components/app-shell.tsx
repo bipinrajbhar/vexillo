@@ -17,7 +17,7 @@ function headerTitle(pathname: string): string {
     const key = decodeURIComponent(flagDetailMatch[1])
     return key || 'Flag'
   }
-  if (pathname.match(/^\/org\/[^/]+\/flags$/)) return 'Feature flags'
+  if (pathname.match(/^\/org\/[^/]+\/flags$/)) return 'Flags'
   if (pathname.match(/^\/org\/[^/]+\/environments$/)) return 'Environments'
   if (pathname.match(/^\/org\/[^/]+\/members$/)) return 'Members'
   if (pathname.match(/^\/org\/[^/]+\/settings$/)) return 'Settings'
