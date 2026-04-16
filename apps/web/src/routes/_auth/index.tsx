@@ -1,22 +1,17 @@
-import {
-  useState,
-  useEffect,
-  useCallback,
-  useMemo,
-  type FormEvent,
-} from "react";
-import { Link } from "@tanstack/react-router";
-import { Plus, Search, ChevronDown, MoreHorizontal } from "lucide-react";
-import { toast } from "sonner";
+import { useState, useEffect, useMemo, type FormEvent } from 'react'
+import { Link } from '@tanstack/react-router'
+import { Plus, Search, ChevronDown, MoreHorizontal } from 'lucide-react'
+import { toast } from 'sonner'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   useReactTable,
   getCoreRowModel,
   getPaginationRowModel,
   flexRender,
   type ColumnDef,
-} from "@tanstack/react-table";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+} from '@tanstack/react-table'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,14 +21,14 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+} from '@/components/ui/alert-dialog'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from "@/components/ui/dialog";
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -42,10 +37,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
   TableBody,
@@ -53,17 +48,10 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { useOrg } from "@/lib/org-context";
-import { api, type FlagRow, type EnvRef as Env } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface FlagsData {
-  flags: FlagRow[];
-  environments: Env[];
-}
+} from '@/components/ui/table'
+import { useOrg } from '@/lib/org-context'
+import { api, type FlagRow, type EnvRef as Env } from '@/lib/api-client'
+import { cn } from '@/lib/utils'
 
 // ── Create Flag Dialog ───────────────────────────────────────────────────────
 
@@ -71,63 +59,62 @@ function CreateFlagDialog({
   orgSlug,
   open,
   onOpenChange,
-  onCreated,
+  onSuccess,
 }: {
-  orgSlug: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreated: (flag: FlagRow, envs: Env[]) => void;
+  orgSlug: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSuccess: () => void
 }) {
-  const [name, setName] = useState("");
-  const [key, setKey] = useState("");
-  const [description, setDescription] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [name, setName] = useState('')
+  const [key, setKey] = useState('')
+  const [description, setDescription] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   function slugify(s: string) {
     return s
       .toLowerCase()
       .trim()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "");
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
   }
 
   function handleNameChange(value: string) {
-    setName(value);
-    setKey(slugify(value));
+    setName(value)
+    setKey(slugify(value))
   }
 
   async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
+    e.preventDefault()
+    if (!name.trim()) return
 
-    setSubmitting(true);
+    setSubmitting(true)
     try {
       const { flag } = await api.flags.create(orgSlug, {
         name: name.trim(),
         key: key.trim() || slugify(name),
         description: description.trim(),
-      });
-      const data = await api.flags.list(orgSlug);
-      onCreated(flag, data.environments);
-      onOpenChange(false);
-      setName("");
-      setKey("");
-      setDescription("");
-      toast.success(`Flag "${flag.name}" created`);
+      })
+      onSuccess()
+      onOpenChange(false)
+      setName('')
+      setKey('')
+      setDescription('')
+      toast.success(`Flag "${flag.name}" created`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create flag");
+      toast.error(err instanceof Error ? err.message : 'Failed to create flag')
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
   function handleOpenChange(value: boolean) {
     if (!submitting) {
-      onOpenChange(value);
+      onOpenChange(value)
       if (!value) {
-        setName("");
-        setKey("");
-        setDescription("");
+        setName('')
+        setKey('')
+        setDescription('')
       }
     }
   }
@@ -136,7 +123,7 @@ function CreateFlagDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New feature flag</DialogTitle>
+          <DialogTitle>New flag</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
@@ -161,10 +148,8 @@ function CreateFlagDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="flag-description">
-              Description{" "}
-              <span className="text-muted-foreground font-normal">
-                (optional)
-              </span>
+              Description{' '}
+              <span className="text-muted-foreground font-normal">(optional)</span>
             </Label>
             <Textarea
               id="flag-description"
@@ -188,183 +173,128 @@ function CreateFlagDialog({
               disabled={submitting || !name.trim()}
               className="shadow-surface-xs"
             >
-              {submitting ? "Creating…" : "Create flag"}
+              {submitting ? 'Creating…' : 'Create flag'}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  );
+  )
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-const DATE_FMT = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-});
+const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
 export function FlagsPage() {
-  const { org, role } = useOrg();
-  const isAdmin = role === "admin";
+  const { org, role } = useOrg()
+  const isAdmin = role === 'admin'
+  const queryClient = useQueryClient()
 
-  const [data, setData] = useState<FlagsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [flagToDelete, setFlagToDelete] = useState<FlagRow | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [envFilter, setEnvFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [createOpen, setCreateOpen] = useState(false)
+  const [flagToDelete, setFlagToDelete] = useState<FlagRow | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [envFilter, setEnvFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
 
-  const load = useCallback(async () => {
-    try {
-      setError(null);
-      const result = await api.flags.list(org.slug);
-      setData(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load flags");
-    } finally {
-      setLoading(false);
-    }
-  }, [org.slug]);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['flags', org.slug],
+    queryFn: () => api.flags.list(org.slug),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (flag: FlagRow) => api.flags.delete(org.slug, flag.key),
+    onSuccess: (_, flag) => {
+      queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })
+      toast.success(`Flag "${flag.name}" deleted`)
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete flag')
+    },
+  })
+
+  const environments = data?.environments ?? []
+  const flagsList = data?.flags ?? []
 
   useEffect(() => {
-    load();
-  }, [load]);
-
-  useEffect(() => {
-    if (envFilter === "" && data?.environments.length) {
-      setEnvFilter(data.environments[0].id);
+    if (envFilter === '' && environments.length) {
+      setEnvFilter(environments[0].id)
     }
-  }, [data, envFilter]);
+  }, [environments, envFilter])
 
-  function handleCreated(flag: FlagRow, envs: Env[]) {
-    setData((prev) => {
-      const environments = envs;
-      const newFlag: FlagRow = {
-        ...flag,
-        states: Object.fromEntries(environments.map((e) => [e.slug, false])),
-      };
-      return {
-        flags: [newFlag, ...(prev?.flags ?? [])],
-        environments,
-      };
-    });
-  }
-
-  async function confirmDelete() {
-    if (!flagToDelete) return;
-    const flag = flagToDelete;
-    setFlagToDelete(null);
-    try {
-      await api.flags.delete(org.slug, flag.key);
-      setData((prev) =>
-        prev
-          ? { ...prev, flags: prev.flags.filter((f) => f.id !== flag.id) }
-          : prev,
-      );
-      toast.success(`Flag "${flag.name}" deleted`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete flag");
-    }
-  }
-
-  const environments = data?.environments ?? [];
-  const flagsList = data?.flags ?? [];
-  const selectedEnv = environments.find((e) => e.id === envFilter) ?? null;
+  const selectedEnv = environments.find((e) => e.id === envFilter) ?? null
 
   const filteredFlags = useMemo(() => {
     return flagsList.filter((flag) => {
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        if (
-          !flag.name.toLowerCase().includes(q) &&
-          !flag.key.toLowerCase().includes(q)
-        ) {
-          return false;
+        const q = searchQuery.toLowerCase()
+        if (!flag.name.toLowerCase().includes(q) && !flag.key.toLowerCase().includes(q)) {
+          return false
         }
       }
-      if (statusFilter !== "all") {
-        const isOn = selectedEnv ? !!flag.states[selectedEnv.slug] : null;
-        if (statusFilter === "on" && isOn !== true) return false;
-        if (statusFilter === "off" && isOn !== false) return false;
+      if (statusFilter !== 'all') {
+        const isOn = selectedEnv ? !!flag.states[selectedEnv.slug] : null
+        if (statusFilter === 'on' && isOn !== true) return false
+        if (statusFilter === 'off' && isOn !== false) return false
       }
-      return true;
-    });
-  }, [flagsList, searchQuery, statusFilter, selectedEnv]);
+      return true
+    })
+  }, [flagsList, searchQuery, statusFilter, selectedEnv])
 
   const columns = useMemo<ColumnDef<FlagRow>[]>(
     () => [
       {
-        accessorKey: "name",
-        header: "Flag",
+        accessorKey: 'name',
+        header: 'Flag',
         size: 600,
         cell: ({ row }) => {
-          const flag = row.original;
+          const flag = row.original
           return (
             <div className="space-y-1 py-0.5">
               <p className="font-medium text-sm leading-none">{flag.name}</p>
-              <p className="font-mono text-xs text-muted-foreground">
-                {flag.key}
-              </p>
+              <p className="font-mono text-xs text-muted-foreground">{flag.key}</p>
               {flag.description && (
-                <p className="text-xs text-muted-foreground max-w-sm">
-                  {flag.description}
-                </p>
+                <p className="text-xs text-muted-foreground max-w-sm">{flag.description}</p>
               )}
               <p className="text-xs text-muted-foreground pt-0.5">
-                {flag.createdByName ?? "Unknown"} ·{" "}
-                {DATE_FMT.format(new Date(flag.createdAt))}
+                {flag.createdByName ?? 'Unknown'} · {DATE_FMT.format(new Date(flag.createdAt))}
               </p>
             </div>
-          );
+          )
         },
       },
       {
-        id: "status",
-        header: "Status",
+        id: 'status',
+        header: 'Status',
         size: 100,
         cell: ({ row }) => {
-          const isOn = selectedEnv
-            ? !!row.original.states[selectedEnv.slug]
-            : null;
+          const isOn = selectedEnv ? !!row.original.states[selectedEnv.slug] : null
           return isOn === null ? (
             <span className="text-muted-foreground">—</span>
           ) : (
-            <Badge variant={isOn ? "default" : "secondary"}>
-              {isOn ? "On" : "Off"}
-            </Badge>
-          );
+            <Badge variant={isOn ? 'default' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
+          )
         },
       },
       {
-        id: "actions",
+        id: 'actions',
         enableHiding: false,
         size: 48,
         cell: ({ row }) => {
-          const flag = row.original;
+          const flag = row.original
           return (
-            <div className="flex justify-center">
+            <div className="flex justify-end">
               <DropdownMenu>
                 <DropdownMenuTrigger
                   type="button"
-                  className={cn(
-                    buttonVariants({ variant: "ghost", size: "icon" }),
-                    "h-8 w-8",
-                  )}
+                  className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }), 'h-8 w-8')}
                 >
                   <MoreHorizontal className="h-4 w-4" />
                   <span className="sr-only">Open menu</span>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem>
-                    <Link
-                      to="/org/$slug/flags/$key"
-                      params={{ slug: org.slug, key: flag.key }}
-                      className="w-full"
-                    >
+                    <Link to="/org/$slug/flags/$key" params={{ slug: org.slug, key: flag.key }} className="w-full">
                       Edit
                     </Link>
                   </DropdownMenuItem>
@@ -382,30 +312,28 @@ export function FlagsPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          );
+          )
         },
       },
     ],
-    [org.slug, selectedEnv, isAdmin],
-  );
+    [org.slug, selectedEnv, isAdmin]
+  )
 
   const table = useReactTable({
     data: filteredFlags,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-  });
+  })
 
-  const envFilterLabel = selectedEnv?.name ?? "—";
-  const statusFilterLabel =
-    statusFilter === "all" ? "All" : statusFilter === "on" ? "On" : "Off";
+  const envFilterLabel = selectedEnv?.name ?? '—'
+  const statusFilterLabel = statusFilter === 'all' ? 'All' : statusFilter === 'on' ? 'On' : 'Off'
 
   return (
     <div className="page-container page-container-wide page-enter">
       <div className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="page-eyebrow mb-1.5">Workspace</p>
-          <h1 className="page-title">Feature flags</h1>
+          <h1 className="page-title">Flags</h1>
         </div>
         {isAdmin && (
           <Button
@@ -419,7 +347,7 @@ export function FlagsPage() {
         )}
       </div>
 
-      {!loading && !error && (
+      {!isLoading && !error && (
         <div className="flex items-center gap-2 mb-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -436,26 +364,16 @@ export function FlagsPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger
                   type="button"
-                  className={cn(
-                    buttonVariants({ variant: "outline", size: "default" }),
-                    "gap-1.5 font-normal",
-                  )}
+                  className={cn(buttonVariants({ variant: 'outline', size: 'default' }), 'gap-1.5 font-normal')}
                 >
                   <span className="text-muted-foreground">Env:</span>
                   <span>{envFilterLabel}</span>
                   <ChevronDown className="ml-0.5 h-3.5 w-3.5 text-muted-foreground" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-36">
-                  <DropdownMenuRadioGroup
-                    value={envFilter}
-                    onValueChange={setEnvFilter}
-                  >
+                  <DropdownMenuRadioGroup value={envFilter} onValueChange={setEnvFilter}>
                     {environments.map((env) => (
-                      <DropdownMenuRadioItem
-                        key={env.id}
-                        value={env.id}
-                        closeOnClick
-                      >
+                      <DropdownMenuRadioItem key={env.id} value={env.id} closeOnClick>
                         {env.name}
                       </DropdownMenuRadioItem>
                     ))}
@@ -467,29 +385,17 @@ export function FlagsPage() {
             <DropdownMenu>
               <DropdownMenuTrigger
                 type="button"
-                className={cn(
-                  buttonVariants({ variant: "outline", size: "default" }),
-                  "gap-1.5 font-normal",
-                )}
+                className={cn(buttonVariants({ variant: 'outline', size: 'default' }), 'gap-1.5 font-normal')}
               >
                 <span className="text-muted-foreground">Status:</span>
                 <span>{statusFilterLabel}</span>
                 <ChevronDown className="ml-0.5 h-3.5 w-3.5 text-muted-foreground" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-32">
-                <DropdownMenuRadioGroup
-                  value={statusFilter}
-                  onValueChange={setStatusFilter}
-                >
-                  <DropdownMenuRadioItem value="all" closeOnClick>
-                    All
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="on" closeOnClick>
-                    On
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="off" closeOnClick>
-                    Off
-                  </DropdownMenuRadioItem>
+                <DropdownMenuRadioGroup value={statusFilter} onValueChange={setStatusFilter}>
+                  <DropdownMenuRadioItem value="all" closeOnClick>All</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="on" closeOnClick>On</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="off" closeOnClick>Off</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -502,23 +408,18 @@ export function FlagsPage() {
           className="mb-8 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           role="alert"
         >
-          {error}
+          {error instanceof Error ? error.message : 'Failed to load flags'}
         </div>
       )}
 
-      {!loading && !error && flagsList.length === 0 && (
+      {!isLoading && !error && flagsList.length === 0 && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center shadow-surface">
-          <p className="mb-1 text-base font-medium text-foreground">
-            No flags yet
-          </p>
+          <p className="mb-1 text-base font-medium text-foreground">No flags yet</p>
           <p className="mb-8 max-w-sm text-sm text-muted-foreground">
             Toggle features on or off per environment.
           </p>
           {isAdmin && (
-            <Button
-              onClick={() => setCreateOpen(true)}
-              className="gap-2 shadow-surface-xs"
-            >
+            <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-surface-xs">
               <Plus className="h-4 w-4" />
               New flag
             </Button>
@@ -526,7 +427,7 @@ export function FlagsPage() {
         </div>
       )}
 
-      {!loading && !error && flagsList.length > 0 && (
+      {!isLoading && !error && flagsList.length > 0 && (
         <>
           <div className="rounded-md border">
             <Table>
@@ -534,16 +435,10 @@ export function FlagsPage() {
                 {table.getHeaderGroups().map((headerGroup) => (
                   <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
-                      <TableHead
-                        key={header.id}
-                        style={{ width: header.getSize() }}
-                      >
+                      <TableHead key={header.id} style={{ width: header.getSize() }}>
                         {header.isPlaceholder
                           ? null
-                          : flexRender(
-                              header.column.columnDef.header,
-                              header.getContext(),
-                            )}
+                          : flexRender(header.column.columnDef.header, header.getContext())}
                       </TableHead>
                     ))}
                   </TableRow>
@@ -554,24 +449,15 @@ export function FlagsPage() {
                   table.getRowModel().rows.map((row) => (
                     <TableRow key={row.id}>
                       {row.getVisibleCells().map((cell) => (
-                        <TableCell
-                          key={cell.id}
-                          style={{ width: cell.column.getSize() }}
-                        >
-                          {flexRender(
-                            cell.column.columnDef.cell,
-                            cell.getContext(),
-                          )}
+                        <TableCell key={cell.id} style={{ width: cell.column.getSize() }}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </TableCell>
                       ))}
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell
-                      colSpan={columns.length}
-                      className="h-24 text-center"
-                    >
+                    <TableCell colSpan={columns.length} className="h-24 text-center">
                       No flags match your filters.
                     </TableCell>
                   </TableRow>
@@ -607,15 +493,10 @@ export function FlagsPage() {
         orgSlug={org.slug}
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={handleCreated}
+        onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
       />
 
-      <AlertDialog
-        open={!!flagToDelete}
-        onOpenChange={(open) => {
-          if (!open) setFlagToDelete(null);
-        }}
-      >
+      <AlertDialog open={!!flagToDelete} onOpenChange={(open) => { if (!open) setFlagToDelete(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete flag</AlertDialogTitle>
@@ -625,12 +506,19 @@ export function FlagsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>
+            <AlertDialogAction
+              onClick={() => {
+                if (flagToDelete) {
+                  setFlagToDelete(null)
+                  deleteMutation.mutate(flagToDelete)
+                }
+              }}
+            >
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }
