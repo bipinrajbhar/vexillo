@@ -156,7 +156,7 @@ describe('GET /api/dashboard/:orgSlug/context', () => {
 
 describe('GET /api/dashboard/:orgSlug/flags', () => {
   it('returns flags and environments', async () => {
-    const flags = [{ id: 'f1', name: 'My Flag', key: 'my-flag', description: '', createdAt: new Date(), states: { prod: true, staging: false } }];
+    const flags = [{ id: 'f1', name: 'My Flag', key: 'my-flag', description: '', createdAt: new Date(), createdByName: null, states: { prod: true, staging: false } }];
     const environments = [{ id: 'e1', name: 'Production', slug: 'prod' }, { id: 'e2', name: 'Staging', slug: 'staging' }];
 
     const app = makeApp(
@@ -209,7 +209,7 @@ describe('POST /api/dashboard/:orgSlug/flags', () => {
   });
 
   it('creates a flag and returns 201', async () => {
-    const created = { id: 'f-new', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date() };
+    const created = { id: 'f-new', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date(), createdByUserId: 'u1' };
     const app = makeApp(
       adminService({ createFlag: async () => created }),
       adminSession,
@@ -227,7 +227,7 @@ describe('POST /api/dashboard/:orgSlug/flags', () => {
   });
 
   it('auto-slugifies name into key', async () => {
-    const created = { id: 'f2', orgId: 'org-1', name: 'My Feature', key: 'my-feature', description: '', createdAt: new Date() };
+    const created = { id: 'f2', orgId: 'org-1', name: 'My Feature', key: 'my-feature', description: '', createdAt: new Date(), createdByUserId: 'u1' };
     const app = makeApp(
       adminService({ createFlag: async () => created }),
       adminSession,
@@ -274,7 +274,7 @@ describe('PATCH /api/dashboard/:orgSlug/flags/:key', () => {
   });
 
   it('updates flag and returns 200', async () => {
-    const updated = { id: 'f1', orgId: 'org-1', name: 'New Name', key: 'my-flag', description: '', createdAt: new Date() };
+    const updated = { id: 'f1', orgId: 'org-1', name: 'New Name', key: 'my-flag', description: '', createdAt: new Date(), createdByUserId: 'u1' };
     const app = makeApp(
       adminService({ updateFlag: async () => updated }),
       adminSession,

@@ -1,22 +1,30 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { ArrowLeft, Flag, Pencil, Check, X, Trash2 } from 'lucide-react'
+import { ArrowLeft, Pencil, Check, X, Trash2, User, Calendar } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useOrg } from '@/lib/org-context'
 import { api, type FlagRow, type EnvRef as Env } from '@/lib/api-client'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+function initials(name: string) {
+  return name.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase()
+}
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
@@ -223,8 +231,6 @@ export function FlagDetailPage() {
     )
   }
 
-  const enabledCount = environments.filter((e) => flag.states[e.slug]).length
-
   return (
     <div className="page-container page-container-narrow page-enter">
       <Link
@@ -236,41 +242,59 @@ export function FlagDetailPage() {
         Back to flags
       </Link>
 
-      <div className="flex items-start gap-3 mb-8">
-        <Flag className="h-5 w-5 text-muted-foreground mt-1 shrink-0" strokeWidth={1.75} />
-        <div className="min-w-0 flex-1">
-          <p className="page-eyebrow mb-1">Feature flag</p>
-          <h1 className="page-title">{flag.name}</h1>
-          <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-            <code className="text-[0.75rem] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded-sm">
-              {flag.key}
-            </code>
-            {environments.length > 0 && (
-              <Badge variant="secondary" className="text-[0.7rem]">
-                {enabledCount}/{environments.length} envs on
-              </Badge>
-            )}
+      {/* ── Flag identity card ─────────────────────────────────────────── */}
+      <div className="surface-card mb-8 overflow-hidden">
+        <div className="px-5 py-5 sm:px-6">
+          <p className="page-eyebrow mb-2">Feature flag</p>
+          <h1 className="page-title mb-1">{flag.name}</h1>
+          <code className="inline-block font-mono text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-sm">
+            {flag.key}
+          </code>
+        </div>
+
+        <div className="border-t border-border">
+          {/* Description row */}
+          <div className="px-5 py-4 sm:px-6">
+            <EditableField
+              label="Description"
+              value={flag.description}
+              multiline
+              onSave={handleSaveDescription}
+              disabled={!isAdmin}
+            />
+          </div>
+
+          {/* Meta strip */}
+          <div className="border-t border-border grid grid-cols-2 divide-x divide-border">
+            <div className="px-5 py-4 sm:px-6 flex items-center gap-3">
+              {flag.createdByName ? (
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-[0.65rem] font-semibold text-muted-foreground">
+                  {initials(flag.createdByName)}
+                </span>
+              ) : (
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <User className="h-3.5 w-3.5" />
+                </span>
+              )}
+              <div className="min-w-0">
+                <p className="text-[0.7rem] font-medium uppercase tracking-wide text-muted-foreground">Created by</p>
+                <p className="text-sm text-foreground truncate">{flag.createdByName ?? '—'}</p>
+              </div>
+            </div>
+            <div className="px-5 py-4 sm:px-6 flex items-center gap-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <Calendar className="h-3.5 w-3.5" />
+              </span>
+              <div>
+                <p className="text-[0.7rem] font-medium uppercase tracking-wide text-muted-foreground">Created</p>
+                <p className="text-sm text-foreground">{DATE_FMT.format(new Date(flag.createdAt))}</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="space-y-8">
-        <div className="surface-card px-5 py-5 sm:px-6 space-y-5">
-          <h2 className="text-[0.8125rem] font-semibold text-foreground">Details</h2>
-          <EditableField
-            label="Name"
-            value={flag.name}
-            onSave={handleSaveName}
-            disabled={!isAdmin}
-          />
-          <EditableField
-            label="Description"
-            value={flag.description}
-            multiline
-            onSave={handleSaveDescription}
-            disabled={!isAdmin}
-          />
-        </div>
 
         <div className="surface-card overflow-hidden">
           <div className="px-5 py-4 sm:px-6 border-b border-border">
@@ -350,11 +374,10 @@ export function FlagDetailPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete flag?</DialogTitle>
+            <DialogDescription>
+              <strong>{flag.name}</strong> will be permanently removed from all environments. This cannot be undone.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will permanently delete <span className="font-medium text-foreground">{flag.name}</span> and
-            remove it from all environments. This action cannot be undone.
-          </p>
           <DialogFooter>
             <Button
               type="button"

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -74,13 +75,12 @@ function DemoteDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Revoke access?</DialogTitle>
+          <DialogDescription>
+            <strong>{user.email}</strong> will lose this access immediately. They can be added again via{' '}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">SUPER_ADMIN_EMAILS</code>{' '}
+            before their next sign-in.
+          </DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          <strong>{user.email}</strong> will lose this access immediately. They can be
-          added again via{' '}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">SUPER_ADMIN_EMAILS</code>{' '}
-          before their next sign-in.
-        </p>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={demoting}>
             Cancel

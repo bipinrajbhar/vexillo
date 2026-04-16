@@ -6,6 +6,7 @@ export type FlagRow = {
   key: string
   description: string
   createdAt: string
+  createdByName: string | null
   states: Record<string, boolean>
 }
 

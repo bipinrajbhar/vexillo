@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -114,11 +115,9 @@ function NewApiKeyDialog({ apiKey, onClose }: { apiKey: string; onClose: () => v
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>API key generated</DialogTitle>
+          <DialogDescription>Copy this key now — it will not be shown again.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Copy this key now — it will not be shown again.
-          </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all">
               {apiKey}
@@ -170,11 +169,10 @@ function DeleteEnvDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Delete environment?</DialogTitle>
+          <DialogDescription>
+            Deleting <strong>{env.name}</strong> will remove all its flag states and API keys. This cannot be undone.
+          </DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          Deleting <strong>{env.name}</strong> will remove all its flag states and API keys. This
-          cannot be undone.
-        </p>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={deleting}>
             Cancel
