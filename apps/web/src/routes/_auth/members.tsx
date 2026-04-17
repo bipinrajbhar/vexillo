@@ -203,12 +203,12 @@ export function MembersPage() {
         cell: ({ row }) => {
           const member = row.original
           const isSelf = member.id === currentUserId
-          if (isSuperAdmin && !isSelf) {
+          if (isSuperAdmin && !isSelf && !member.isSuperAdmin) {
             return <RolePicker member={member} orgSlug={org.slug} />
           }
           return (
             <Badge variant="secondary" className="capitalize">
-              {member.role}
+              {member.isSuperAdmin ? 'Super admin' : member.role}
             </Badge>
           )
         },
