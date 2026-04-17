@@ -17,6 +17,7 @@ export type MemberRow = {
   email: string;
   role: string;
   createdAt: Date;
+  isSuperAdmin: boolean;
 };
 
 export async function queryOrgMembers(db: DbClient, orgId: string): Promise<MemberRow[]> {
@@ -27,6 +28,7 @@ export async function queryOrgMembers(db: DbClient, orgId: string): Promise<Memb
       email: authUser.email,
       role: organizationMembers.role,
       createdAt: organizationMembers.createdAt,
+      isSuperAdmin: authUser.isSuperAdmin,
     })
     .from(organizationMembers)
     .innerJoin(authUser, eq(authUser.id, organizationMembers.userId))
@@ -84,6 +86,7 @@ export async function queryRemovedOrgMembers(db: DbClient, orgId: string): Promi
       email: authUser.email,
       role: organizationMembers.role,
       createdAt: organizationMembers.createdAt,
+      isSuperAdmin: authUser.isSuperAdmin,
     })
     .from(organizationMembers)
     .innerJoin(authUser, eq(authUser.id, organizationMembers.userId))

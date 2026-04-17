@@ -27,6 +27,7 @@ export type MemberRow = {
   email: string
   role: string
   createdAt: string
+  isSuperAdmin: boolean
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────────
