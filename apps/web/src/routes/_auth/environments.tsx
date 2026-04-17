@@ -198,26 +198,25 @@ function AllowedOriginsEditor({
   const [newOrigin, setNewOrigin] = useState('')
   const [saving, setSaving] = useState(false)
 
-  async function handleAdd() {
+  const isDirty = origins.join('\n') !== env.allowedOrigins.join('\n')
+
+  function handleAdd() {
     const trimmed = newOrigin.trim()
     if (!trimmed || origins.includes(trimmed)) return
-    const next = [...origins, trimmed]
-    setOrigins(next)
+    setOrigins((prev) => [...prev, trimmed])
     setNewOrigin('')
-    await save(next)
   }
 
-  async function handleRemove(origin: string) {
-    const next = origins.filter((o) => o !== origin)
-    setOrigins(next)
-    await save(next)
+  function handleRemove(origin: string) {
+    setOrigins((prev) => prev.filter((o) => o !== origin))
   }
 
-  async function save(next: string[]) {
+  async function handleSave() {
     setSaving(true)
     try {
-      await api.environments.patch(orgSlug, env.id, next)
-      onUpdated(env.id, next)
+      await api.environments.patch(orgSlug, env.id, origins)
+      onUpdated(env.id, origins)
+      toast.success('Allowed origins saved')
     } catch (err) {
       setOrigins(env.allowedOrigins)
       toast.error(err instanceof Error ? err.message : 'Failed to update allowed origins')
@@ -239,7 +238,6 @@ function AllowedOriginsEditor({
               {origin}
               <button
                 onClick={() => handleRemove(origin)}
-                disabled={saving}
                 className="ml-0.5 rounded hover:text-destructive focus-visible:outline-none"
                 aria-label={`Remove ${origin}`}
               >
@@ -258,16 +256,20 @@ function AllowedOriginsEditor({
           onKeyDown={(e) => {
             if (e.key === 'Enter') { e.preventDefault(); handleAdd() }
           }}
-          disabled={saving}
         />
         <Button
           size="sm"
           variant="outline"
           onClick={handleAdd}
-          disabled={saving || !newOrigin.trim()}
+          disabled={!newOrigin.trim()}
           className="h-7 shrink-0 px-2 text-xs"
         >
           Add
+        </Button>
+      </div>
+      <div className="flex justify-end">
+        <Button size="sm" onClick={handleSave} disabled={!isDirty || saving}>
+          {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>
     </div>
@@ -386,7 +388,7 @@ export function EnvironmentsPage() {
       },
       {
         id: 'apiKey',
-        header: 'API Key',
+        header: 'Key hint',
         size: 260,
         cell: ({ row }) => {
           const { keyHint } = row.original
