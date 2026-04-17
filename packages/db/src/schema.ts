@@ -19,6 +19,7 @@ export const organizationMembers = pgTable('organization_members', {
   userId: text('user_id').notNull().references(() => authUser.id, { onDelete: 'cascade' }),
   role: text('role').notNull().default('viewer'), // 'admin' | 'viewer'
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  removedAt: timestamp('removed_at', { withTimezone: true }),
 }, (table) => [
   primaryKey({ columns: [table.orgId, table.userId] }),
 ]);

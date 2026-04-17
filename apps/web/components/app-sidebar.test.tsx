@@ -42,7 +42,6 @@ describe('AppSidebar', () => {
       <AppSidebar org={mockOrg} role="viewer" userEmail="user@example.com" isSuperAdmin={false} />
     )
     expect(screen.queryByText('Organizations')).toBeNull()
-    expect(screen.queryByText('Administrators')).toBeNull()
   })
 
   it('does not show admin links when isSuperAdmin is omitted', () => {
@@ -50,19 +49,14 @@ describe('AppSidebar', () => {
       <AppSidebar org={mockOrg} role="viewer" userEmail="user@example.com" />
     )
     expect(screen.queryByText('Organizations')).toBeNull()
-    expect(screen.queryByText('Administrators')).toBeNull()
   })
 
-  it('shows Organizations and Administrators links when isSuperAdmin is true', () => {
+  it('shows Organizations link when isSuperAdmin is true', () => {
     render(
       <AppSidebar org={mockOrg} role="viewer" userEmail="user@example.com" isSuperAdmin={true} />
     )
     const orgsLink = screen.getByRole('link', { name: /organizations/i })
     expect(orgsLink).toBeInTheDocument()
     expect(orgsLink).toHaveAttribute('href', '/org/acme/admin')
-
-    const adminsLink = screen.getByRole('link', { name: /administrators/i })
-    expect(adminsLink).toBeInTheDocument()
-    expect(adminsLink).toHaveAttribute('href', '/org/acme/admin/users')
   })
 })

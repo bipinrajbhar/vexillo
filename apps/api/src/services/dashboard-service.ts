@@ -20,6 +20,8 @@ import {
   countOrgAdmins,
   updateMemberRole,
   removeMember,
+  restoreMember,
+  queryRemovedOrgMembers,
   queryUserIsSuperAdmin,
   insertAuditLog,
   type FlagWithStates,
@@ -125,8 +127,10 @@ export interface DashboardService {
 
   // Members
   getMembers(orgId: string): Promise<MemberRow[]>;
+  getRemovedMembers(orgId: string): Promise<MemberRow[]>;
   updateMemberRole(orgId: string, actorId: string, userId: string, role: string): Promise<{ userId: string; role: string }>;
   removeMember(orgId: string, actorId: string, userId: string): Promise<void>;
+  restoreMember(orgId: string, actorId: string, userId: string): Promise<void>;
 
 }
 
@@ -243,6 +247,10 @@ export function createDashboardService(db: DbClient): DashboardService {
       return queryOrgMembers(db, orgId);
     },
 
+    async getRemovedMembers(orgId) {
+      return queryRemovedOrgMembers(db, orgId);
+    },
+
     async updateMemberRole(orgId, actorId, userId, role) {
       if (role !== 'admin' && role !== 'viewer') {
         throw new PreconditionError('Role must be admin or viewer');
@@ -279,6 +287,15 @@ export function createDashboardService(db: DbClient): DashboardService {
       }
       await removeMember(db, orgId, userId);
       await insertAuditLog(db, { orgId, actorId, action: 'member.remove', targetType: 'member', targetId: userId });
+    },
+
+    async restoreMember(orgId, actorId, userId) {
+      if (await queryUserIsSuperAdmin(db, userId)) {
+        throw new ForbiddenError('Cannot restore a super admin');
+      }
+      const ok = await restoreMember(db, orgId, userId);
+      if (!ok) throw new NotFoundError('Member not found');
+      await insertAuditLog(db, { orgId, actorId, action: 'member.restore', targetType: 'member', targetId: userId });
     },
 
   };

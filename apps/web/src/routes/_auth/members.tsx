@@ -1,309 +1,467 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Trash2, ChevronDown } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Search, ChevronDown, MoreHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useReactTable,
+  getCoreRowModel,
+  getPaginationRowModel,
+  flexRender,
+  type ColumnDef,
+} from '@tanstack/react-table'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { authClient } from '@/lib/auth-client'
 import { useOrg } from '@/lib/org-context'
 import { api, type MemberRow as Member } from '@/lib/api-client'
 
-// ── Remove Confirmation Dialog ────────────────────────────────────────────────
+// ── Role Picker ───────────────────────────────────────────────────────────────
 
-function RemoveMemberDialog({
-  orgSlug,
-  member,
-  onClose,
-  onRemoved,
-}: {
-  orgSlug: string
-  member: Member
-  onClose: () => void
-  onRemoved: (id: string) => void
-}) {
-  const [removing, setRemoving] = useState(false)
+function RolePicker({ member, orgSlug }: { member: Member; orgSlug: string }) {
+  const [changing, setChanging] = useState(false)
+  const queryClient = useQueryClient()
 
-  async function handleRemove() {
-    setRemoving(true)
-    try {
-      await api.members.delete(orgSlug, member.id)
-      onRemoved(member.id)
-      onClose()
-      toast.success(`${member.name} removed`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove member')
-    } finally {
-      setRemoving(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={() => !removing && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Remove member?</DialogTitle>
-          <DialogDescription>
-            <strong>{member.name}</strong> ({member.email}) will lose access immediately.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={removing}>
-            Cancel
-          </Button>
-          <Button variant="destructive" onClick={handleRemove} disabled={removing}>
-            {removing ? 'Removing…' : 'Remove member'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── Member row ────────────────────────────────────────────────────────────────
-
-function MemberRow({
-  orgSlug,
-  member,
-  currentUserId,
-  isAdmin,
-  onRoleChange,
-  onRemove,
-}: {
-  orgSlug: string
-  member: Member
-  currentUserId: string | undefined
-  isAdmin: boolean
-  onRoleChange: (id: string, role: string) => void
-  onRemove: (member: Member) => void
-}) {
-  const [changingRole, setChangingRole] = useState(false)
-  const isSelf = member.id === currentUserId
-
-  async function handleRoleChange(newRole: string) {
+  async function handleChange(newRole: string) {
     if (newRole === member.role) return
-    setChangingRole(true)
+    setChanging(true)
     try {
       await api.members.patch(orgSlug, member.id, newRole)
-      onRoleChange(member.id, newRole)
+      queryClient.setQueryData(
+        ['members', orgSlug],
+        (old: { members: Member[] } | undefined) =>
+          old
+            ? { members: old.members.map((m) => (m.id === member.id ? { ...m, role: newRole } : m)) }
+            : old,
+      )
       toast.success(`${member.name} is now a${newRole === 'admin' ? 'n' : ''} ${newRole}`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update role')
     } finally {
-      setChangingRole(false)
+      setChanging(false)
     }
   }
 
-  const rolePicker = isAdmin && !isSelf && (
+  return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        disabled={changingRole}
+        disabled={changing}
         className={cn(
           buttonVariants({ variant: 'outline', size: 'sm' }),
-          'w-full justify-between gap-1.5 capitalize shadow-surface-xs sm:w-auto',
+          'gap-1.5 capitalize font-normal',
         )}
       >
         {member.role}
         <ChevronDown className="h-3.5 w-3.5 opacity-60" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => handleRoleChange('admin')}>
-          Admin
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => handleRoleChange('viewer')}>
-          Viewer
-        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => handleChange('admin')}>Admin</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => handleChange('viewer')}>Viewer</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  )
-
-  const roleReadOnly = (!isAdmin || isSelf) && (
-    <Badge
-      variant="secondary"
-      className="h-6 w-full justify-center px-2 text-[0.6875rem] font-medium capitalize sm:w-auto"
-    >
-      {member.role}
-    </Badge>
-  )
-
-  return (
-    <div className="data-table-body-row grid grid-cols-1 gap-3 border-b border-border px-5 py-4 last:border-0 sm:grid-cols-[minmax(0,1fr)_6.5rem_7.5rem_2.5rem] sm:items-center sm:gap-4 sm:px-6">
-      <div className="flex min-w-0 gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[0.75rem] font-medium text-muted-foreground uppercase select-none">
-          {member.name.charAt(0)}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="data-table-primary-label text-[0.9375rem]">{member.name}</p>
-            {isSelf && (
-              <Badge
-                variant="secondary"
-                className="h-6 px-2 text-[0.6875rem] font-medium"
-              >
-                You
-              </Badge>
-            )}
-          </div>
-          <p className="mt-0.5 truncate text-[0.8125rem] text-muted-foreground">
-            {member.email}
-          </p>
-        </div>
-      </div>
-
-      <div className="min-w-0 sm:flex sm:items-center">
-        {rolePicker}
-        {roleReadOnly}
-      </div>
-
-      <span className="text-sm tabular-nums text-muted-foreground">
-        {new Date(member.createdAt).toLocaleDateString()}
-      </span>
-
-      <div className="flex justify-start sm:justify-end">
-        {isAdmin && !isSelf ? (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => onRemove(member)}
-            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-            aria-label={`Remove ${member.name}`}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        ) : (
-          <span className="inline-flex h-8 w-8 items-center justify-center text-xs text-muted-foreground">
-            —
-          </span>
-        )}
-      </div>
-    </div>
   )
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
 export function MembersPage() {
   const { org, role } = useOrg()
   const isAdmin = role === 'admin'
+  const queryClient = useQueryClient()
   const { data: session } = authClient.useSession()
   const currentUserId = session?.user?.id
+  const isSuperAdmin = (session?.user as Record<string, unknown> | undefined)?.isSuperAdmin === true
 
-  const [members, setMembers] = useState<Member[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [removeTarget, setRemoveTarget] = useState<Member | null>(null)
+  const [suspendTarget, setSuspendTarget] = useState<Member | null>(null)
+  const [suspending, setSuspending] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
 
-  const load = useCallback(async () => {
-    if (!isAdmin) {
-      setLoading(false)
-      return
-    }
+  const { data: activeData, isLoading, error } = useQuery({
+    queryKey: ['members', org.slug],
+    queryFn: () => api.members.list(org.slug),
+  })
+
+  const { data: removedData } = useQuery({
+    queryKey: ['members-removed', org.slug],
+    queryFn: () => api.members.listRemoved(org.slug),
+    enabled: isAdmin,
+  })
+
+  const membersList = activeData?.members ?? []
+  const removedMembers = removedData?.members ?? []
+
+  const filteredMembers = useMemo(() => {
+    return membersList.filter((member) => {
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        if (!member.name.toLowerCase().includes(q) && !member.email.toLowerCase().includes(q)) {
+          return false
+        }
+      }
+      if (roleFilter === 'super_admin' && !member.isSuperAdmin) return false
+      if (roleFilter === 'admin' && (member.isSuperAdmin || member.role !== 'admin')) return false
+      if (roleFilter === 'viewer' && member.role !== 'viewer') return false
+      return true
+    })
+  }, [membersList, searchQuery, roleFilter])
+
+  async function handleSuspend() {
+    if (!suspendTarget) return
+    setSuspending(true)
     try {
-      setError(null)
-      const result = await api.members.list(org.slug)
-      setMembers(result.members)
+      await api.members.delete(org.slug, suspendTarget.id)
+      queryClient.invalidateQueries({ queryKey: ['members', org.slug] })
+      queryClient.invalidateQueries({ queryKey: ['members-removed', org.slug] })
+      toast.success(`${suspendTarget.name} suspended`)
+      setSuspendTarget(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load members')
+      toast.error(err instanceof Error ? err.message : 'Failed to suspend member')
     } finally {
-      setLoading(false)
+      setSuspending(false)
     }
-  }, [isAdmin, org.slug])
-
-  useEffect(() => {
-    load()
-  }, [load])
-
-  function handleRoleChange(id: string, newRole: string) {
-    setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, role: newRole } : m)))
   }
 
-  function handleRemoved(id: string) {
-    setMembers((prev) => prev.filter((m) => m.id !== id))
+  async function handleRestore(member: Member) {
+    setRestoringId(member.id)
+    try {
+      await api.members.restore(org.slug, member.id)
+      queryClient.invalidateQueries({ queryKey: ['members', org.slug] })
+      queryClient.invalidateQueries({ queryKey: ['members-removed', org.slug] })
+      toast.success(`${member.name} restored`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to restore member')
+    } finally {
+      setRestoringId(null)
+    }
   }
+
+  const columns = useMemo<ColumnDef<Member>[]>(
+    () => [
+      {
+        id: 'member',
+        header: 'Member',
+        size: 600,
+        cell: ({ row }) => {
+          const member = row.original
+          const isSelf = member.id === currentUserId
+          return (
+            <div className="flex min-w-0 items-center gap-3 py-0.5">
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium leading-none">{member.name}</p>
+                  {isSelf && (
+                    <Badge variant="secondary" className="h-5 px-1.5 text-[0.6875rem]">
+                      You
+                    </Badge>
+                  )}
+                </div>
+                <p className="truncate text-xs text-muted-foreground">{member.email}</p>
+              </div>
+            </div>
+          )
+        },
+      },
+      {
+        id: 'role',
+        header: 'Role',
+        size: 130,
+        cell: ({ row }) => {
+          const member = row.original
+          const isSelf = member.id === currentUserId
+          if (isSuperAdmin && !isSelf && !member.isSuperAdmin) {
+            return <RolePicker member={member} orgSlug={org.slug} />
+          }
+          return (
+            <Badge variant="secondary" className="capitalize">
+              {member.isSuperAdmin ? 'Super admin' : member.role}
+            </Badge>
+          )
+        },
+      },
+      {
+        id: 'joined',
+        header: 'Joined',
+        size: 130,
+        cell: ({ row }) => (
+          <span className="text-sm tabular-nums text-muted-foreground">
+            {DATE_FMT.format(new Date(row.original.createdAt))}
+          </span>
+        ),
+      },
+      {
+        id: 'actions',
+        enableHiding: false,
+        size: 48,
+        cell: ({ row }) => {
+          const member = row.original
+          const isSelf = member.id === currentUserId
+          if (!isSuperAdmin || isSelf) {
+            return (
+              <span className="inline-flex h-8 w-8 items-center justify-center text-xs text-muted-foreground">
+                —
+              </span>
+            )
+          }
+          return (
+            <div className="flex justify-end">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  type="button"
+                  className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }), 'h-8 w-8')}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                  <span className="sr-only">Open menu</span>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => setSuspendTarget(member)}>
+                    Suspend
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    [org.slug, isSuperAdmin, currentUserId],
+  )
+
+  const table = useReactTable({
+    data: filteredMembers,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+  })
+
+  const roleFilterLabel =
+    roleFilter === 'all' ? 'All' :
+    roleFilter === 'super_admin' ? 'Super admin' :
+    roleFilter === 'admin' ? 'Admin' : 'Viewer'
 
   return (
     <div className="page-container page-container-wide page-enter">
       <div className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="page-eyebrow mb-1.5">Workspace</p>
           <h1 className="page-title">Members</h1>
-          <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-            Invite collaborators and control who can change flags versus view-only access.
-          </p>
         </div>
       </div>
-
-      {!isAdmin && !loading && (
-        <div
-          className="mb-8 rounded-lg border border-border bg-muted/35 px-4 py-3 text-sm text-muted-foreground"
-          role="status"
-        >
-          Only admins can manage members.
-        </div>
-      )}
 
       {error && (
         <div
           className="mb-8 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           role="alert"
         >
-          {error}
+          {error instanceof Error ? error.message : 'Failed to load members'}
         </div>
       )}
 
-      {!loading && !error && isAdmin && members.length === 0 && (
+      {!isLoading && !error && membersList.length > 0 && (
+        <div className="mb-4 flex items-center gap-2">
+          <div className="relative max-w-sm flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search members..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 text-sm"
+            />
+          </div>
+          <div className="ml-auto flex shrink-0 gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                type="button"
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'default' }),
+                  'gap-1.5 font-normal',
+                )}
+              >
+                <span className="text-muted-foreground">Role:</span>
+                <span>{roleFilterLabel}</span>
+                <ChevronDown className="ml-0.5 h-3.5 w-3.5 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-32">
+                <DropdownMenuRadioGroup value={roleFilter} onValueChange={setRoleFilter}>
+                  <DropdownMenuRadioItem value="all" closeOnClick>All</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="super_admin" closeOnClick>Super admin</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="admin" closeOnClick>Admin</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="viewer" closeOnClick>Viewer</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      )}
+
+      {!isLoading && !error && membersList.length === 0 && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center shadow-surface">
           <p className="mb-1 text-base font-medium text-foreground">No members yet</p>
           <p className="max-w-sm text-sm text-muted-foreground">
-            People who join this organization will appear here. Promotion and removal
-            controls are available to admins.
+            People who join this organization will appear here. Promotion and removal controls are
+            available to admins.
           </p>
         </div>
       )}
 
-      {!loading && !error && members.length > 0 && (
-        <div className="table-shell overflow-hidden">
-          <div className="hidden grid-cols-[minmax(0,1fr)_6.5rem_7.5rem_2.5rem] gap-4 border-b border-border bg-muted/45 px-5 py-3 sm:grid dark:bg-muted/15">
-            <span className="data-table-th">Member</span>
-            <span className="data-table-th">Role</span>
-            <span className="data-table-th">Joined</span>
-            <span className="sr-only">Actions</span>
+      {!isLoading && !error && membersList.length > 0 && (
+        <>
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead key={header.id} style={{ width: header.getSize() }}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(header.column.columnDef.header, header.getContext())}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id} style={{ width: cell.column.getSize() }}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={columns.length} className="h-24 text-center">
+                      No members match your search.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
           </div>
-          {members.map((member) => (
-            <MemberRow
-              key={member.id}
-              orgSlug={org.slug}
-              member={member}
-              currentUserId={currentUserId}
-              isAdmin={isAdmin}
-              onRoleChange={handleRoleChange}
-              onRemove={setRemoveTarget}
-            />
-          ))}
+
+          <div className="flex items-center justify-between py-4">
+            <p className="text-xs text-muted-foreground">
+              {(() => {
+                if (filteredMembers.length === 0) return `0 of ${membersList.length} members`
+                const { pageIndex, pageSize } = table.getState().pagination
+                const start = pageIndex * pageSize + 1
+                const end = Math.min((pageIndex + 1) * pageSize, filteredMembers.length)
+                return `${start}–${end} of ${membersList.length} members`
+              })()}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {!isLoading && !error && isAdmin && removedMembers.length > 0 && (
+        <div className="mt-10">
+          <h2 className="mb-3 text-sm font-medium text-muted-foreground">Suspended members</h2>
+          <div className="rounded-md border">
+            <Table>
+              <TableBody>
+                {removedMembers.map((member) => (
+                  <TableRow key={member.id}>
+                    <TableCell>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <p className="text-sm font-medium leading-none text-muted-foreground">
+                            {member.name}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">{member.email}</p>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRestore(member)}
+                        disabled={restoringId === member.id}
+                      >
+                        {restoringId === member.id ? 'Restoring…' : 'Restore'}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
 
-      {removeTarget && (
-        <RemoveMemberDialog
-          orgSlug={org.slug}
-          member={removeTarget}
-          onClose={() => setRemoveTarget(null)}
-          onRemoved={handleRemoved}
-        />
-      )}
+      <AlertDialog
+        open={!!suspendTarget}
+        onOpenChange={(open) => {
+          if (!open && !suspending) setSuspendTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Suspend member?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{suspendTarget?.name}</strong> ({suspendTarget?.email}) will lose access
+              immediately. You can restore them later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={suspending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleSuspend} disabled={suspending}>
+              {suspending ? 'Suspending…' : 'Suspend member'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

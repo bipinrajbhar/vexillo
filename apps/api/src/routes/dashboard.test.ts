@@ -55,8 +55,10 @@ function makeMockService(overrides: Partial<DashboardService> = {}): DashboardSe
     deleteEnvironment: notImplemented('deleteEnvironment') as DashboardService['deleteEnvironment'],
     rotateEnvironmentKey: notImplemented('rotateEnvironmentKey') as DashboardService['rotateEnvironmentKey'],
     getMembers: notImplemented('getMembers') as DashboardService['getMembers'],
+    getRemovedMembers: notImplemented('getRemovedMembers') as DashboardService['getRemovedMembers'],
     updateMemberRole: notImplemented('updateMemberRole') as DashboardService['updateMemberRole'],
     removeMember: notImplemented('removeMember') as DashboardService['removeMember'],
+    restoreMember: notImplemented('restoreMember') as DashboardService['restoreMember'],
     ...overrides,
   };
 }

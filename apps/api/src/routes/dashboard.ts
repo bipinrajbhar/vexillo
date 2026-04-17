@@ -225,8 +225,14 @@ export function createDashboardRouter(service: DashboardService, getSession: Get
 
   router.get('/:orgSlug/members', async (c) => {
     const org = c.get('org');
-    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
     const members = await service.getMembers(org.id);
+    return c.json({ members });
+  });
+
+  router.get('/:orgSlug/members/removed', async (c) => {
+    const org = c.get('org');
+    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+    const members = await service.getRemovedMembers(org.id);
     return c.json({ members });
   });
 
@@ -249,6 +255,18 @@ export function createDashboardRouter(service: DashboardService, getSession: Get
 
     try {
       await service.removeMember(org.id, c.get('session')!.user.id, c.req.param('userId'));
+      return c.body(null, 204);
+    } catch (err) {
+      return handleServiceError(err, c) ?? (() => { throw err; })();
+    }
+  });
+
+  router.post('/:orgSlug/members/:userId/restore', async (c) => {
+    const org = c.get('org');
+    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    try {
+      await service.restoreMember(org.id, c.get('session')!.user.id, c.req.param('userId'));
       return c.body(null, 204);
     } catch (err) {
       return handleServiceError(err, c) ?? (() => { throw err; })();

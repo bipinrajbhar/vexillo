@@ -387,13 +387,20 @@ export function createOrgOAuthRouter(db: DbClient, auth: Auth) {
         .values({ orgId: org.id, userId, role })
         .onConflictDoUpdate({
           target: [organizationMembers.orgId, organizationMembers.userId],
-          set: { role },
+          set: { role, removedAt: null },
         });
     } else {
-      await db
-        .insert(organizationMembers)
-        .values({ orgId: org.id, userId, role })
-        .onConflictDoNothing();
+      const [existingMember] = await db
+        .select({ removedAt: organizationMembers.removedAt })
+        .from(organizationMembers)
+        .where(and(eq(organizationMembers.orgId, org.id), eq(organizationMembers.userId, userId)))
+        .limit(1);
+
+      if (existingMember?.removedAt) return fail('access_revoked');
+
+      if (!existingMember) {
+        await db.insert(organizationMembers).values({ orgId: org.id, userId, role });
+      }
     }
 
     const redirectTarget = parsed.next || '/';

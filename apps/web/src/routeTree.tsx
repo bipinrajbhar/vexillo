@@ -8,7 +8,6 @@ import { MembersPage } from './routes/_auth/members'
 import { AdminOrgsPage } from './routes/admin/index'
 import { AdminOrgsNewPage } from './routes/admin/orgs.new'
 import { AdminOrgDetailPage } from './routes/admin/orgs.$slug'
-import { AdminUsersPage } from './routes/admin/users'
 import { OrgSignInPage } from './routes/org-sign-in'
 import { authClient } from '@/lib/auth-client'
 import type { OrgInfo } from '@/lib/org-context'
@@ -140,13 +139,6 @@ const adminOrgDetailRoute = createRoute({
   component: AdminOrgDetailPage,
 })
 
-// /org/$slug/admin/users — super admin management
-const adminUsersRoute = createRoute({
-  getParentRoute: () => adminRoute,
-  path: '/users',
-  component: AdminUsersPage,
-})
-
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   orgSignInRoute,
@@ -154,6 +146,6 @@ export const routeTree = rootRoute.addChildren([
     flagsRoute,
     environmentsRoute,
     membersRoute,
-    adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute, adminUsersRoute]),
+    adminRoute.addChildren([adminIndexRoute, adminOrgsNewRoute, adminOrgDetailRoute]),
   ]),
 ])

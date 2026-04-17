@@ -27,6 +27,7 @@ export type MemberRow = {
   email: string
   role: string
   createdAt: string
+  isSuperAdmin: boolean
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────────
@@ -132,6 +133,14 @@ export const api = {
     delete: (orgSlug: string, userId: string) =>
       call<void>(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(userId)}`, {
         method: 'DELETE',
+      }),
+
+    listRemoved: (orgSlug: string) =>
+      call<{ members: MemberRow[] }>(`/api/dashboard/${orgSlug}/members/removed`),
+
+    restore: (orgSlug: string, userId: string) =>
+      call<void>(`/api/dashboard/${orgSlug}/members/${encodeURIComponent(userId)}/restore`, {
+        method: 'POST',
       }),
   },
 }

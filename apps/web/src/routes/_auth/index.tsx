@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, type FormEvent } from 'react'
+import { Link } from '@tanstack/react-router'
 import { Plus, Search, ChevronDown, MoreHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -443,6 +444,7 @@ export function FlagsPage() {
           const flag = row.original
           return (
             <div className="flex justify-end">
+              {isAdmin && (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   type="button"
@@ -458,19 +460,16 @@ export function FlagsPage() {
                   <DropdownMenuItem onClick={() => setFlagToRollout(flag)}>
                     Rollout
                   </DropdownMenuItem>
-                  {isAdmin && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onClick={() => setFlagToDelete(flag)}
-                      >
-                        Delete
-                      </DropdownMenuItem>
-                    </>
-                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setFlagToDelete(flag)}
+                  >
+                    Delete
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+              )}
             </div>
           )
         },
@@ -500,6 +499,8 @@ export function FlagsPage() {
             onClick={() => setCreateOpen(true)}
             size="default"
             className="shrink-0 gap-2 shadow-surface-xs"
+            disabled={!isLoading && environments.length === 0}
+            title={!isLoading && environments.length === 0 ? 'Create an environment before adding flags' : undefined}
           >
             <Plus className="h-4 w-4" />
             New flag
@@ -507,7 +508,7 @@ export function FlagsPage() {
         )}
       </div>
 
-      {!isLoading && !error && (
+      {!isLoading && !error && flagsList.length > 0 && (
         <div className="flex items-center gap-2 mb-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -574,15 +575,35 @@ export function FlagsPage() {
 
       {!isLoading && !error && flagsList.length === 0 && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center shadow-surface">
-          <p className="mb-1 text-base font-medium text-foreground">No flags yet</p>
-          <p className="mb-8 max-w-sm text-sm text-muted-foreground">
-            Toggle features on or off per environment.
-          </p>
-          {isAdmin && (
-            <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-surface-xs">
-              <Plus className="h-4 w-4" />
-              New flag
-            </Button>
+          {environments.length === 0 ? (
+            <>
+              <p className="mb-1 text-base font-medium text-foreground">No environments yet</p>
+              <p className="mb-8 max-w-sm text-sm text-muted-foreground">
+                Create an environment before adding flags.
+              </p>
+              {isAdmin && (
+                <Link
+                  to="/org/$slug/environments"
+                  params={{ slug: org.slug }}
+                  className={cn(buttonVariants({ variant: 'default' }), 'gap-2 shadow-surface-xs')}
+                >
+                  Go to Environments
+                </Link>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="mb-1 text-base font-medium text-foreground">No flags yet</p>
+              <p className="mb-8 max-w-sm text-sm text-muted-foreground">
+                Toggle features on or off per environment.
+              </p>
+              {isAdmin && (
+                <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-surface-xs">
+                  <Plus className="h-4 w-4" />
+                  New flag
+                </Button>
+              )}
+            </>
           )}
         </div>
       )}
