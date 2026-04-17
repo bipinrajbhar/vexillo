@@ -73,8 +73,8 @@ Then:
 | Role | Capabilities |
 |------|-------------|
 | Viewer | Read flags, environments, and members |
-| Admin | All viewer permissions + manage flags, environments, and API keys |
-| Super-admin | All admin permissions + change member roles, suspend/restore members, manage orgs |
+| Admin | All viewer permissions + manage flags, environments, API keys, and change member roles (except super-admin roles) |
+| Super-admin | All admin permissions + suspend/restore members, manage orgs |
 
 ## Scripts
 

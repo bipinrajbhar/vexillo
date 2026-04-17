@@ -54,8 +54,8 @@ The API starts on `http://localhost:3000` with hot reload.
 Within `/api/dashboard/*`, most endpoints require an active org session. Role-specific restrictions:
 
 - **All members (viewer + admin)** — read flags, environments, and members
-- **Admins** — manage flags, environments, API keys, and view suspended members
-- **Super-admins** — change member roles, suspend/restore members
+- **Admins** — manage flags, environments, API keys, view suspended members, and change member roles (cannot change super-admin roles)
+- **Super-admins** — suspend/restore members, manage orgs
 
 ## Auth
 
