@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Boxes, Building2, Flag, Shield, Users } from 'lucide-react'
+import { Boxes, Building2, Flag, Users } from 'lucide-react'
 
 import { SignOutButton } from '@/components/sign-out-button'
 import {
@@ -103,16 +103,6 @@ export function AppSidebar({
                     >
                       <Building2 className="opacity-80" />
                       <span className="font-medium">Organizations</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      isActive={pathname.startsWith(`/org/${slug}/admin/users`)}
-                      className="px-3 py-2.5"
-                      render={<Link to="/org/$slug/admin/users" params={{ slug }} />}
-                    >
-                      <Shield className="opacity-80" />
-                      <span className="font-medium">Administrators</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 </>
