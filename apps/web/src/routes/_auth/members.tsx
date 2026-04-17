@@ -99,6 +99,7 @@ export function MembersPage() {
   const queryClient = useQueryClient()
   const { data: session } = authClient.useSession()
   const currentUserId = session?.user?.id
+  const isSuperAdmin = (session?.user as Record<string, unknown> | undefined)?.isSuperAdmin === true
 
   const [suspendTarget, setSuspendTarget] = useState<Member | null>(null)
   const [suspending, setSuspending] = useState(false)
@@ -197,7 +198,7 @@ export function MembersPage() {
         cell: ({ row }) => {
           const member = row.original
           const isSelf = member.id === currentUserId
-          if (isAdmin && !isSelf) {
+          if (isSuperAdmin && !isSelf) {
             return <RolePicker member={member} orgSlug={org.slug} />
           }
           return (
@@ -224,7 +225,7 @@ export function MembersPage() {
         cell: ({ row }) => {
           const member = row.original
           const isSelf = member.id === currentUserId
-          if (!isAdmin || isSelf) {
+          if (!isSuperAdmin || isSelf) {
             return (
               <span className="inline-flex h-8 w-8 items-center justify-center text-xs text-muted-foreground">
                 —
@@ -252,7 +253,7 @@ export function MembersPage() {
         },
       },
     ],
-    [org.slug, isAdmin, currentUserId],
+    [org.slug, isSuperAdmin, currentUserId],
   )
 
   const table = useReactTable({
