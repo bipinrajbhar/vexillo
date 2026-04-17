@@ -1,4 +1,2 @@
-iam-deploy-policy.json
-setup-secrets.sh
 cdk.out/
 *.pkg
