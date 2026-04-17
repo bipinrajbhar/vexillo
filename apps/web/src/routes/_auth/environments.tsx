@@ -63,7 +63,17 @@ function CreateEnvDialog({
   onCreated: (env: EnvRow, apiKey: string) => void
 }) {
   const [name, setName] = useState('')
+  const [slug, setSlug] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  function slugify(s: string) {
+    return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  }
+
+  function handleNameChange(value: string) {
+    setName(value)
+    setSlug(slugify(value))
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -74,6 +84,7 @@ function CreateEnvDialog({
       onCreated(result.environment, result.apiKey)
       onOpenChange(false)
       setName('')
+      setSlug('')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create environment')
     } finally {
@@ -84,7 +95,7 @@ function CreateEnvDialog({
   function handleOpenChange(value: boolean) {
     if (!submitting) {
       onOpenChange(value)
-      if (!value) setName('')
+      if (!value) { setName(''); setSlug('') }
     }
   }
 
@@ -100,14 +111,20 @@ function CreateEnvDialog({
             <Input
               id="env-name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => handleNameChange(e.target.value)}
               placeholder="e.g. Production"
               required
               autoFocus
             />
-            <p className="text-[0.75rem] text-muted-foreground">
-              A slug will be auto-generated from the name.
-            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="env-slug">Slug</Label>
+            <Input
+              id="env-slug"
+              value={slug}
+              readOnly
+              className="cursor-default bg-muted font-mono text-sm text-muted-foreground"
+            />
           </div>
           <DialogFooter>
             <Button
