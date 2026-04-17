@@ -78,18 +78,16 @@ export function AppSidebar({
                   <span className="font-medium">Environments</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {isAdmin && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname === membersPath}
-                    className="px-3 py-2.5"
-                    render={<Link to="/org/$slug/members" params={{ slug }} />}
-                  >
-                    <Users className="opacity-80" />
-                    <span className="font-medium">Members</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={pathname === membersPath}
+                  className="px-3 py-2.5"
+                  render={<Link to="/org/$slug/members" params={{ slug }} />}
+                >
+                  <Users className="opacity-80" />
+                  <span className="font-medium">Members</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               {isSuperAdmin && (
                 <>
                   <SidebarMenuItem>
