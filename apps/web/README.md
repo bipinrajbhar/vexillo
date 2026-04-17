@@ -40,18 +40,19 @@ Dashboard runs at `http://localhost:5173`.
 | Path | Access | Description |
 |------|--------|-------------|
 | `/` | Public | Workspace finder — enter an org slug to navigate to it |
-| `/org/:slug/sign-in` | Public | Org-specific sign-in (org's own Okta) |
-| `/org/:slug/flags` | Org member | Feature flags list |
-| `/org/:slug/flags/:key` | Org member | Flag detail + per-environment toggles |
-| `/org/:slug/environments` | Org member | Environments + API keys |
-| `/org/:slug/members` | Org member | Members list |
-| `/admin` | Super-admin | Org list |
-| `/admin/orgs/new` | Super-admin | Create an org |
-| `/admin/orgs/:slug` | Super-admin | Org detail — edit Okta config, suspend/activate |
+| `/org/:slug/sign-in` | Public | Org-specific sign-in via Okta |
+| `/org/:slug/flags` | Org member | Feature flags list with per-environment status |
+| `/org/:slug/environments` | Org member | Environments, API key hints, and allowed origins |
+| `/org/:slug/members` | Org member | Members list (read-only for viewers, managed by super admins) |
+| `/org/:slug/admin` | Super-admin | Org list |
+| `/org/:slug/admin/orgs/new` | Super-admin | Create an org |
+| `/org/:slug/admin/orgs/:orgSlug` | Super-admin | Org detail — edit Okta config, suspend/activate |
 
 ## Tech stack
 
 - [Vite](https://vitejs.dev) + [React 19](https://react.dev)
-- [TanStack Router](https://tanstack.com/router) — file-based routing with type-safe `beforeLoad` guards
-- [Tailwind CSS v4](https://tailwindcss.com) + [Base UI](https://base-ui.com)
+- [TanStack Router](https://tanstack.com/router) — type-safe routing with `beforeLoad` guards
+- [TanStack Query](https://tanstack.com/query) — server state, caching, and mutations
+- [TanStack Table](https://tanstack.com/table) — headless data tables
+- [Tailwind CSS v4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com) components
 - [BetterAuth](https://better-auth.com) client for session management

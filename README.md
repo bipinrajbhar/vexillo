@@ -51,7 +51,7 @@ pnpm dev
 
 ## First-time setup
 
-Sign-in requires an org to exist. Seed the first one directly into the database (it can't be created via the UI yet because sign-in requires an org):
+Sign-in requires an org to exist. Seed the first one directly into the database:
 
 ```sh
 DATABASE_URL=<value> OKTA_SECRET_KEY=<value> \
@@ -65,8 +65,16 @@ Then:
 
 1. Sign in at `http://localhost:5173/org/<slug>/sign-in` via Okta
 2. Your account is auto-promoted to super-admin if your email is in `SUPER_ADMIN_EMAILS`
-3. Use `/admin` to create additional organisations and configure their Okta credentials
+3. Use `/org/<slug>/admin` to create additional organisations and configure their Okta credentials
 4. Org members sign in at `/org/<slug>/sign-in` — their account is provisioned automatically on first sign-in via Okta JIT
+
+## Member roles
+
+| Role | Capabilities |
+|------|-------------|
+| Viewer | Read flags, environments, and members |
+| Admin | All viewer permissions + manage flags, environments, and API keys |
+| Super-admin | All admin permissions + change member roles, suspend/restore members, manage orgs |
 
 ## Scripts
 

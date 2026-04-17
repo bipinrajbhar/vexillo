@@ -46,8 +46,16 @@ The API starts on `http://localhost:3000` with hot reload.
 | `/api/auth/org-oauth/*` | None | Per-org Okta PKCE OAuth flow (authorize + callback) |
 | `/api/auth/*` | None | BetterAuth — session management |
 | `/api/sdk/*` | API key | Public SDK endpoint — flag states, CDN-cacheable |
-| `/api/dashboard/*` | Session | Org dashboard — flags, environments, members, API keys |
+| `/api/dashboard/*` | Session (org member) | Org dashboard — flags, environments, members, API keys |
 | `/api/superadmin/*` | Super-admin | Org CRUD, Okta config, status management |
+
+### Dashboard access levels
+
+Within `/api/dashboard/*`, most endpoints require an active org session. Role-specific restrictions:
+
+- **All members (viewer + admin)** — read flags, environments, and members
+- **Admins** — manage flags, environments, API keys, and view suspended members
+- **Super-admins** — change member roles, suspend/restore members
 
 ## Auth
 
