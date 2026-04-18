@@ -43,6 +43,8 @@ The API starts on `http://localhost:3000` with hot reload.
 | Prefix | Auth | Description |
 |--------|------|-------------|
 | `GET /health` | None | Health check for load balancers |
+| `GET /api/docs` | None | Interactive API docs (Scalar UI) |
+| `GET /api/openapi.json` | None | OpenAPI spec (JSON) |
 | `/api/auth/org-oauth/*` | None | Per-org Okta PKCE OAuth flow (authorize + callback) |
 | `/api/auth/*` | None | BetterAuth — session management |
 | `/api/sdk/*` | API key | Public SDK endpoint — flag states, CDN-cacheable |
