@@ -204,7 +204,7 @@ export class VexilloStack extends cdk.Stack {
       defaultTtl: cdk.Duration.seconds(30),
       maxTtl: cdk.Duration.seconds(60),
       minTtl: cdk.Duration.seconds(0),
-      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization'),
+      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization', 'CloudFront-Viewer-Country'),
       queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
       cookieBehavior: cloudfront.CacheCookieBehavior.none(),
     });

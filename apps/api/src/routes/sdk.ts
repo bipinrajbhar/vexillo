@@ -1,11 +1,14 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq, and, asc, sql } from 'drizzle-orm';
-import { apiKeys, environments, organizations, flags, flagStates, queryEnvironmentFlagStates } from '@vexillo/db';
+import { eq } from 'drizzle-orm';
+import { apiKeys, environments, organizations, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
 import type { StreamRegistry } from '../lib/stream-registry';
 import type { AuthCache } from '../lib/auth-cache';
+import { createSnapshotCache } from '../lib/snapshot-cache';
 import type { SnapshotCache } from '../lib/snapshot-cache';
+import { createFlagCache } from '../lib/flag-cache';
+import { evaluateCountryRule } from '../lib/evaluate-country-rule';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -56,8 +59,22 @@ const getFlagsRoute = createRoute({
   summary: 'Get feature flags for an environment',
   description:
     'Returns all flag states for the environment associated with the provided API key. ' +
-    'Authentication is via `Authorization: Bearer <api-key>`.',
+    'Authentication is via `Authorization: Bearer <api-key>`. ' +
+    'Pass `CloudFront-Viewer-Country` (ISO 3166-1 alpha-2, e.g. `US`) to get ' +
+    'geo-targeted flag states; omit to fall back to the environment toggle.',
   security: [{ BearerAuth: [] }],
+  request: {
+    headers: z.object({
+      'cloudfront-viewer-country': z
+        .string()
+        .length(2)
+        .optional()
+        .openapi({
+          description: 'ISO 3166-1 alpha-2 country code. Injected by CloudFront in production; pass manually in dev/Scalar.',
+          example: 'US',
+        }),
+    }),
+  },
   responses: {
     200: {
       content: { 'application/json': { schema: FlagsResponseSchema } },
@@ -83,6 +100,11 @@ export function createSdkRouter(
   authCache?: AuthCache,
   snapshotCache?: SnapshotCache,
 ) {
+  // snapshotCache: serialized JSON strings for SSE streams (per environment)
+  const cache = snapshotCache ?? createSnapshotCache();
+  // rawCache: raw flag rows for the REST /flags endpoint (geo-eval happens per-request)
+  const rawCache = createFlagCache();
+
   const sdk = new OpenAPIHono();
 
   // Register Bearer auth security scheme so it appears in the generated spec.
@@ -174,20 +196,32 @@ export function createSdkRouter(
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    const flagRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
+    // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
+    const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
+
+    let rawRows = rawCache.get(auth.environmentId);
+    if (!rawRows) {
+      rawRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
+      rawCache.set(auth.environmentId, rawRows);
+    }
+
+    const evaluatedFlags = rawRows.map((r) => ({
+      key: r.key,
+      enabled: evaluateCountryRule({
+        allowedCountries: r.allowedCountries ?? [],
+        countryCode,
+        envEnabled: r.enabled,
+      }),
+    }));
 
     const headers = {
       'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 's-maxage=30, stale-while-revalidate=60',
     };
 
-    return c.json(
-      { flags: flagRows.map((r) => ({ key: r.key, enabled: r.enabled })) },
-      200,
-      headers,
-    );
+    return c.json({ flags: evaluatedFlags }, 200, headers);
   });
 
   sdk.get('/flags/stream', async (c) => {
@@ -235,29 +269,25 @@ export function createSdkRouter(
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    // Snapshot: cache is written on every flag toggle; DB only on cold miss.
-    let snapshot = snapshotCache?.get(auth.environmentId) ?? null;
-    if (!snapshot) {
-      const rows = await db
-        .select({
-          key: flags.key,
-          enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
-        })
-        .from(flags)
-        .leftJoin(
-          flagStates,
-          and(
-            eq(flagStates.flagId, flags.id),
-            eq(flagStates.environmentId, auth.environmentId),
-          ),
-        )
-        .orderBy(asc(flags.key));
+    // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
+    const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
 
-      snapshot = JSON.stringify({
-        flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
-      });
-      snapshotCache?.set(auth.environmentId, snapshot);
+    // Use rawCache (shared with the REST endpoint) so SSE and /flags share one warm cache.
+    let rawRows = rawCache.get(auth.environmentId);
+    if (!rawRows) {
+      rawRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
+      rawCache.set(auth.environmentId, rawRows);
     }
+    const snapshot = JSON.stringify({
+      flags: rawRows.map((r) => ({
+        key: r.key,
+        enabled: evaluateCountryRule({
+          allowedCountries: r.allowedCountries ?? [],
+          countryCode,
+          envEnabled: r.enabled,
+        }),
+      })),
+    });
 
     const encoder = new TextEncoder();
 
@@ -310,7 +340,18 @@ export function createSdkRouter(
 
     if (streamRegistry) {
       unregisterStream = streamRegistry.register(auth.environmentId, (payload) => {
-        writer.write(buildEvent(payload)).catch(() => {});
+        const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean; allowedCountries?: string[] }> };
+        const evaluated = JSON.stringify({
+          flags: parsed.flags.map((f) => ({
+            key: f.key,
+            enabled: evaluateCountryRule({
+              allowedCountries: f.allowedCountries ?? [],
+              countryCode,
+              envEnabled: f.enabled,
+            }),
+          })),
+        });
+        writer.write(buildEvent(evaluated)).catch(() => {});
       });
     }
 

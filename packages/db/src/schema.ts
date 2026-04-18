@@ -117,6 +117,8 @@ export const flagStates = pgTable('flag_states', {
   flagId: uuid('flag_id').notNull().references(() => flags.id, { onDelete: 'cascade' }),
   environmentId: uuid('environment_id').notNull().references(() => environments.id, { onDelete: 'cascade' }),
   enabled: boolean('enabled').notNull().default(false),
+  // ISO 3166-1 alpha-2 codes (e.g. ["US","CA"]). Empty = no geo rules, env toggle wins.
+  allowedCountries: text('allowed_countries').array().notNull().default(sql`'{}'::text[]`),
 }, (table) => [
   primaryKey({ columns: [table.flagId, table.environmentId] }),
 ]);

@@ -68,7 +68,7 @@ function makeDocsApp(db: Parameters<typeof createSdkRouter>[0]) {
   const sdkRouter = createSdkRouter(db);
   const app = new Hono();
   app.route('/api/sdk', sdkRouter);
-  app.get('/api/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
+  app.get('/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
   app.get('/api/docs', Scalar({ url: '/api/openapi.json' }));
   return app;
 }
@@ -268,6 +268,72 @@ describe('GET /api/sdk/flags', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 
+  // ── Country targeting (CloudFront-Viewer-Country header) ───────────────────
+
+  it('returns enabled: true for a country in allowedCountries', async () => {
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: false, allowedCountries: ['US', 'CA'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-key', 'CloudFront-Viewer-Country': 'US' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flags: Array<{ key: string; enabled: boolean }> };
+    expect(body.flags).toEqual([{ key: 'geo-flag', enabled: true }]);
+  });
+
+  it('returns enabled: false for a country not in allowedCountries', async () => {
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: true, allowedCountries: ['US'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-key', 'CloudFront-Viewer-Country': 'DE' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flags: Array<{ key: string; enabled: boolean }> };
+    expect(body.flags).toEqual([{ key: 'geo-flag', enabled: false }]);
+  });
+
+  it('falls back to envEnabled when CloudFront-Viewer-Country header is absent', async () => {
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: true, allowedCountries: ['US'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-key' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flags: Array<{ key: string; enabled: boolean }> };
+    expect(body.flags).toEqual([{ key: 'geo-flag', enabled: true }]);
+  });
+
+  it('returns envEnabled when no country rules are configured (empty allowedCountries)', async () => {
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'plain-flag', enabled: false, allowedCountries: [] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags', {
+        headers: { Authorization: 'Bearer sdk-key', 'CloudFront-Viewer-Country': 'US' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flags: Array<{ key: string; enabled: boolean }> };
+    expect(body.flags).toEqual([{ key: 'plain-flag', enabled: false }]);
+  });
+
   // ── In-process flag cache ───────────────────────────────────────────────────
 
   it('serves flags from in-process cache on subsequent requests for the same environment', async () => {
@@ -328,8 +394,7 @@ describe('GET /api/sdk/flags/stream', () => {
 
   it('returns 403 when organization is suspended', async () => {
     const db = makeSdkQueueDb([
-      [{ environmentId: 'env-1' }],
-      [{ id: 'env-1', allowedOrigins: [], orgStatus: 'suspended' }],
+      [{ environmentId: 'env-1', orgId: 'org-1', allowedOrigins: [], orgStatus: 'suspended' }],
     ]);
     const app = makeApp(db);
     const res = await app.fetch(
@@ -342,8 +407,7 @@ describe('GET /api/sdk/flags/stream', () => {
 
   it('returns 403 when Origin is not in allowedOrigins', async () => {
     const db = makeSdkQueueDb([
-      [{ environmentId: 'env-1' }],
-      [{ id: 'env-1', allowedOrigins: ['https://allowed.com'] }],
+      [{ environmentId: 'env-1', orgId: 'org-1', allowedOrigins: ['https://allowed.com'], orgStatus: 'active' }],
     ]);
     const app = makeApp(db);
     const res = await app.fetch(
@@ -359,8 +423,7 @@ describe('GET /api/sdk/flags/stream', () => {
 
   it('returns SSE stream with initial flag snapshot on valid auth', async () => {
     const db = makeSdkQueueDb([
-      [{ environmentId: 'env-1' }],
-      [{ id: 'env-1', allowedOrigins: [] }],
+      [{ environmentId: 'env-1', orgId: 'org-1', allowedOrigins: [], orgStatus: 'active' }],
       [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }],
     ]);
     const app = makeApp(db);
@@ -385,6 +448,86 @@ describe('GET /api/sdk/flags/stream', () => {
       { key: 'feat-a', enabled: true },
       { key: 'feat-b', enabled: false },
     ]);
+    await reader.cancel();
+  });
+
+  it('applies geo evaluation to initial snapshot when CloudFront-Viewer-Country header is present', async () => {
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: false, allowedCountries: ['US', 'CA'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          'CloudFront-Viewer-Country': 'US',
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    const dataLine = text.split('\n').find((l) => l.startsWith('data: '))!;
+    const payload = JSON.parse(dataLine.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(payload.flags).toEqual([{ key: 'geo-flag', enabled: true }]);
+    await reader.cancel();
+  });
+
+  it('applies per-connection geo evaluation when streamRegistry broadcasts a country-rules update', async () => {
+    let capturedSend: ((payload: string) => void) | null = null;
+    const mockRegistry = {
+      register: (_envId: string, send: (payload: string) => void) => {
+        capturedSend = send;
+        return () => {};
+      },
+      broadcast: () => {},
+    };
+
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: false, allowedCountries: [] }],
+    ]);
+    const sdkRouter = createSdkRouter(db, mockRegistry as Parameters<typeof createSdkRouter>[1]);
+    const app = new Hono();
+    app.get('/health', (c) => c.json({ status: 'ok' }));
+    app.route('/api/sdk', sdkRouter);
+
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          'CloudFront-Viewer-Country': 'US',
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+
+    // Consume the initial snapshot (no rules yet → geo-flag disabled)
+    const { value: initVal } = await reader.read();
+    const initText = new TextDecoder().decode(initVal);
+    const initData = JSON.parse(initText.split('\n').find((l) => l.startsWith('data: '))!.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(initData.flags).toEqual([{ key: 'geo-flag', enabled: false }]);
+
+    // Simulate a country-rules update: geo-flag now whitelists US
+    capturedSend!(JSON.stringify({ flags: [{ key: 'geo-flag', enabled: false, allowedCountries: ['US'] }] }));
+
+    // The update should be geo-evaluated: US is in the list → enabled: true
+    const { value: updVal } = await reader.read();
+    const updText = new TextDecoder().decode(updVal);
+    const updData = JSON.parse(updText.split('\n').find((l) => l.startsWith('data: '))!.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(updData.flags).toEqual([{ key: 'geo-flag', enabled: true }]);
+
     await reader.cancel();
   });
 });

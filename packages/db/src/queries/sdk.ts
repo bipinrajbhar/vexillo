@@ -34,11 +34,12 @@ export async function queryEnvironmentFlagStates(
   db: DbClient,
   orgId: string,
   environmentId: string,
-): Promise<{ key: string; enabled: boolean }[]> {
+): Promise<{ key: string; enabled: boolean; allowedCountries: string[] }[]> {
   return db
     .select({
       key: flags.key,
       enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
+      allowedCountries: sql<string[]>`COALESCE(${flagStates.allowedCountries}, '{}'::text[])`,
     })
     .from(flags)
     .leftJoin(

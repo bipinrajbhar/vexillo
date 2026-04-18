@@ -1,6 +1,6 @@
 import { LRUCache } from 'lru-cache';
 
-type FlagRow = { key: string; enabled: boolean };
+type FlagRow = { key: string; enabled: boolean; allowedCountries?: string[] };
 
 export type FlagCache = ReturnType<typeof createFlagCache>;
 

@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, type FormEvent } from 'react'
+import { useState, useEffect, useRef, useMemo, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
-import { Plus, Search, ChevronDown, MoreHorizontal } from 'lucide-react'
+import { Plus, Search, ChevronDown, MoreHorizontal, Check, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -142,16 +143,300 @@ function EditFlagDialog({
   )
 }
 
-// ── Rollout Dialog ───────────────────────────────────────────────────────────
+// ── Country data ─────────────────────────────────────────────────────────────
 
-function RolloutDialog({
+const COUNTRIES = [
+  { code: 'US', name: 'United States', region: 'Americas' },
+  { code: 'CA', name: 'Canada', region: 'Americas' },
+  { code: 'MX', name: 'Mexico', region: 'Americas' },
+  { code: 'BR', name: 'Brazil', region: 'Americas' },
+  { code: 'AR', name: 'Argentina', region: 'Americas' },
+  { code: 'CL', name: 'Chile', region: 'Americas' },
+  { code: 'CO', name: 'Colombia', region: 'Americas' },
+  { code: 'PE', name: 'Peru', region: 'Americas' },
+  { code: 'UY', name: 'Uruguay', region: 'Americas' },
+  { code: 'GB', name: 'United Kingdom', region: 'Europe' },
+  { code: 'IE', name: 'Ireland', region: 'Europe' },
+  { code: 'FR', name: 'France', region: 'Europe' },
+  { code: 'DE', name: 'Germany', region: 'Europe' },
+  { code: 'ES', name: 'Spain', region: 'Europe' },
+  { code: 'PT', name: 'Portugal', region: 'Europe' },
+  { code: 'IT', name: 'Italy', region: 'Europe' },
+  { code: 'NL', name: 'Netherlands', region: 'Europe' },
+  { code: 'BE', name: 'Belgium', region: 'Europe' },
+  { code: 'CH', name: 'Switzerland', region: 'Europe' },
+  { code: 'AT', name: 'Austria', region: 'Europe' },
+  { code: 'SE', name: 'Sweden', region: 'Europe' },
+  { code: 'NO', name: 'Norway', region: 'Europe' },
+  { code: 'DK', name: 'Denmark', region: 'Europe' },
+  { code: 'FI', name: 'Finland', region: 'Europe' },
+  { code: 'IS', name: 'Iceland', region: 'Europe' },
+  { code: 'PL', name: 'Poland', region: 'Europe' },
+  { code: 'CZ', name: 'Czech Republic', region: 'Europe' },
+  { code: 'GR', name: 'Greece', region: 'Europe' },
+  { code: 'RO', name: 'Romania', region: 'Europe' },
+  { code: 'HU', name: 'Hungary', region: 'Europe' },
+  { code: 'JP', name: 'Japan', region: 'Asia Pacific' },
+  { code: 'KR', name: 'South Korea', region: 'Asia Pacific' },
+  { code: 'CN', name: 'China', region: 'Asia Pacific' },
+  { code: 'TW', name: 'Taiwan', region: 'Asia Pacific' },
+  { code: 'HK', name: 'Hong Kong', region: 'Asia Pacific' },
+  { code: 'SG', name: 'Singapore', region: 'Asia Pacific' },
+  { code: 'MY', name: 'Malaysia', region: 'Asia Pacific' },
+  { code: 'TH', name: 'Thailand', region: 'Asia Pacific' },
+  { code: 'VN', name: 'Vietnam', region: 'Asia Pacific' },
+  { code: 'PH', name: 'Philippines', region: 'Asia Pacific' },
+  { code: 'ID', name: 'Indonesia', region: 'Asia Pacific' },
+  { code: 'IN', name: 'India', region: 'Asia Pacific' },
+  { code: 'AU', name: 'Australia', region: 'Asia Pacific' },
+  { code: 'NZ', name: 'New Zealand', region: 'Asia Pacific' },
+  { code: 'AE', name: 'United Arab Emirates', region: 'Middle East & Africa' },
+  { code: 'SA', name: 'Saudi Arabia', region: 'Middle East & Africa' },
+  { code: 'IL', name: 'Israel', region: 'Middle East & Africa' },
+  { code: 'TR', name: 'Turkey', region: 'Middle East & Africa' },
+  { code: 'EG', name: 'Egypt', region: 'Middle East & Africa' },
+  { code: 'ZA', name: 'South Africa', region: 'Middle East & Africa' },
+  { code: 'NG', name: 'Nigeria', region: 'Middle East & Africa' },
+  { code: 'KE', name: 'Kenya', region: 'Middle East & Africa' },
+  { code: 'MA', name: 'Morocco', region: 'Middle East & Africa' },
+]
+
+const COUNTRY_REGIONS = ['Americas', 'Europe', 'Asia Pacific', 'Middle East & Africa'] as const
+
+// ── CountryPicker ─────────────────────────────────────────────────────────────
+
+function CountryPicker({
+  selected,
+  allCountries,
+  onChange,
+  disabled,
+}: {
+  selected: string[]
+  allCountries: boolean
+  onChange: (value: { countries: string[]; allCountries: boolean }) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const [rect, setRect] = useState<DOMRect | null>(null)
+
+  useEffect(() => {
+    if (!open) { setSearch(''); return }
+    const r = triggerRef.current?.getBoundingClientRect()
+    if (r) setRect(r)
+    setTimeout(() => searchRef.current?.focus(), 0)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(e: PointerEvent) {
+      if (
+        triggerRef.current?.contains(e.target as Node) ||
+        dropdownRef.current?.contains(e.target as Node)
+      ) return
+      setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [open])
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    if (!q) return COUNTRIES
+    return COUNTRIES.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
+    )
+  }, [search])
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof COUNTRIES>()
+    for (const region of COUNTRY_REGIONS) map.set(region, [])
+    for (const c of filtered) {
+      const bucket = map.get(c.region)
+      if (bucket) bucket.push(c)
+    }
+    return map
+  }, [filtered])
+
+  function toggle(code: string) {
+    if (allCountries) {
+      onChange({ countries: COUNTRIES.map((c) => c.code).filter((c) => c !== code), allCountries: false })
+    } else {
+      const next = selected.includes(code)
+        ? selected.filter((c) => c !== code)
+        : [...selected, code]
+      const isAll = next.length === COUNTRIES.length
+      onChange({ countries: isAll ? [] : next, allCountries: isAll })
+    }
+  }
+
+  function selectAll() {
+    onChange({ countries: [], allCountries: true })
+  }
+
+  function clear() {
+    onChange({ countries: [], allCountries: false })
+  }
+
+  const label = allCountries
+    ? 'All countries'
+    : selected.length === 0
+      ? 'No countries'
+      : selected.length <= 3
+        ? selected.join(', ')
+        : `${selected.slice(0, 2).join(', ')} +${selected.length - 2}`
+
+  const dropdown = open && rect
+    ? createPortal(
+        <div
+          ref={dropdownRef}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: rect.bottom + 4,
+            right: window.innerWidth - rect.right,
+            zIndex: 9999,
+            width: 280,
+          }}
+          className="rounded-lg border border-border bg-popover shadow-md overflow-hidden flex flex-col"
+        >
+          {/* Search */}
+          <div className="flex items-center gap-1.5 border-b border-border px-2.5 py-1.5">
+            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search countries…"
+              className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+            />
+            {search && (
+              <button type="button" onClick={() => setSearch('')} className="text-muted-foreground hover:text-foreground">
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+
+          {/* Chips row */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border">
+            <button
+              type="button"
+              onClick={selectAll}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.65rem] font-medium transition-colors',
+                allCountries
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border border-border text-muted-foreground hover:bg-muted'
+              )}
+            >
+              {allCountries && <Check className="h-2.5 w-2.5" />}
+              All countries
+            </button>
+            <button
+              type="button"
+              onClick={clear}
+              className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[0.65rem] font-medium text-muted-foreground hover:bg-muted transition-colors"
+            >
+              <X className="h-2.5 w-2.5" />
+              Clear
+            </button>
+            <span className="ml-auto text-[0.65rem] text-muted-foreground tabular-nums">
+              {allCountries ? COUNTRIES.length : selected.length} / {COUNTRIES.length}
+            </span>
+          </div>
+
+          {/* List */}
+          <div className="max-h-52 overflow-y-auto py-1">
+            {filtered.length === 0 ? (
+              <p className="py-4 text-center text-xs text-muted-foreground">No results</p>
+            ) : (
+              Array.from(grouped.entries()).map(([region, countries]) => {
+                if (countries.length === 0) return null
+                return (
+                  <div key={region}>
+                    <p className="px-2.5 py-1 text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                      {region}
+                    </p>
+                    {countries.map(({ code, name }) => {
+                      const checked = allCountries || selected.includes(code)
+                      return (
+                        <button
+                          key={code}
+                          type="button"
+                          onClick={() => toggle(code)}
+                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-muted transition-colors"
+                        >
+                          <span
+                            className={cn(
+                              'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border',
+                              checked ? 'bg-primary border-primary' : 'border-input'
+                            )}
+                          >
+                            {checked && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                          </span>
+                          <span className="font-mono w-7 shrink-0 text-muted-foreground">{code}</span>
+                          <span>{name}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>,
+        document.body
+      )
+    : null
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        className={cn(
+          'inline-flex h-7 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs hover:bg-muted disabled:pointer-events-none disabled:opacity-50 max-w-[160px]',
+          allCountries && 'text-muted-foreground'
+        )}
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className="h-3 w-3 opacity-40 shrink-0" />
+      </button>
+      {dropdown}
+    </>
+  )
+}
+
+// ── Targeting Dialog ──────────────────────────────────────────────────────────
+
+type EnvDraft = { countries: string[]; allCountries: boolean; enabled: boolean }
+
+function buildInitialDraft(flag: FlagRow | null, environments: Env[]): Record<string, EnvDraft> {
+  const draft: Record<string, EnvDraft> = {}
+  for (const env of environments) {
+    const codes = flag?.countryRules[env.slug] ?? []
+    draft[env.id] = {
+      countries: codes,
+      allCountries: codes.length === 0,
+      enabled: !!(flag?.states[env.slug]),
+    }
+  }
+  return draft
+}
+
+function TargetingDialog({
   flag,
   orgSlug,
   environments,
   isAdmin,
   open,
   onOpenChange,
-  onToggle,
+  onChanged,
 }: {
   flag: FlagRow | null
   orgSlug: string
@@ -159,53 +444,191 @@ function RolloutDialog({
   isAdmin: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
-  onToggle: () => void
+  onChanged: () => void
 }) {
-  const [states, setStates] = useState<Record<string, boolean>>(flag?.states ?? {})
+  const [savedDraft, setSavedDraft] = useState<Record<string, EnvDraft>>({})
+  const [draft, setDraft] = useState<Record<string, EnvDraft>>({})
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (flag) setStates(flag.states)
-  }, [flag])
+    if (!open || !flag) return
+    const initial = buildInitialDraft(flag, environments)
+    setSavedDraft(initial)
+    setDraft(initial)
+  }, [flag, environments, open])
 
-  function handleToggle(envId: string, envSlug: string) {
-    if (!flag) return
-    const next = !states[envSlug]
-    setStates((prev) => ({ ...prev, [envSlug]: next }))
-    api.flags.toggle(orgSlug, flag.key, envId)
-      .then(({ enabled }) => {
-        setStates((prev) => ({ ...prev, [envSlug]: enabled }))
-        onToggle()
-      })
-      .catch((err) => {
-        setStates((prev) => ({ ...prev, [envSlug]: !next }))
-        toast.error(err instanceof Error ? err.message : 'Failed to toggle flag')
-      })
+  useEffect(() => {
+    if (!open) return
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault()
+        handleSave()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, draft])
+
+  const isDirtyGlobal = useMemo(() => {
+    return environments.some((env) => {
+      const d = draft[env.id]
+      const s = savedDraft[env.id]
+      if (!d || !s) return false
+      return (
+        d.allCountries !== s.allCountries ||
+        [...d.countries].sort().join(',') !== [...s.countries].sort().join(',') ||
+        d.enabled !== s.enabled
+      )
+    })
+  }, [draft, savedDraft, environments])
+
+  function isEnvDirty(envId: string) {
+    const d = draft[envId]
+    const s = savedDraft[envId]
+    if (!d || !s) return false
+    return (
+      d.allCountries !== s.allCountries ||
+      [...d.countries].sort().join(',') !== [...s.countries].sort().join(',') ||
+      d.enabled !== s.enabled
+    )
+  }
+
+  function patchDraft(envId: string, patch: Partial<EnvDraft>) {
+    setDraft((prev) => ({ ...prev, [envId]: { ...prev[envId], ...patch } }))
+  }
+
+  async function handleSave() {
+    if (!flag || saving || !isDirtyGlobal) return
+    setSaving(true)
+    try {
+      await Promise.all(
+        environments.map(async (env) => {
+          const d = draft[env.id]
+          const s = savedDraft[env.id]
+          if (!d || !s) return
+          const countriesDirty =
+            d.allCountries !== s.allCountries ||
+            [...d.countries].sort().join(',') !== [...s.countries].sort().join(',')
+          const enabledDirty = d.enabled !== s.enabled
+          if (countriesDirty) {
+            await api.flags.updateCountryRules(orgSlug, flag.key, env.id, d.allCountries ? [] : d.countries)
+          }
+          if (enabledDirty) {
+            await api.flags.toggle(orgSlug, flag.key, env.id)
+          }
+        })
+      )
+      setSavedDraft(draft)
+      onChanged()
+      onOpenChange(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleCancel() {
+    setDraft(savedDraft)
+    onOpenChange(false)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Rollout</DialogTitle>
-        </DialogHeader>
-        {environments.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground text-center">No environments yet.</p>
-        ) : (
-          <div className="divide-y divide-border -mx-4 border-t">
-            {environments.map((env) => (
-              <div key={env.id} className="flex items-center justify-between px-4 py-3.5">
-                <p className="text-sm font-medium">{env.name}</p>
-                <Switch
-                  checked={!!states[env.slug]}
-                  onCheckedChange={() => handleToggle(env.id, env.slug)}
-                  disabled={!isAdmin}
-                  aria-label={`Toggle ${flag?.name} in ${env.name}`}
-                />
-              </div>
-            ))}
+      <DialogContent className="sm:max-w-lg p-0 gap-0">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 pr-12">
+          <div className="min-w-0">
+            <p className="text-[0.6875rem] font-medium uppercase tracking-widest text-muted-foreground">Configure</p>
+            <DialogTitle className="truncate text-sm font-semibold tracking-tight">
+              {flag?.name}
+            </DialogTitle>
           </div>
-        )}
-        <DialogFooter showCloseButton />
+        </div>
+
+        {/* Body */}
+        <div className="max-h-[60vh] overflow-y-auto divide-y divide-border">
+          {environments.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">No environments yet.</p>
+          ) : (
+            environments.map((env) => {
+              const d = draft[env.id] ?? { countries: [], allCountries: true, enabled: false }
+              const dirty = isEnvDirty(env.id)
+
+              return (
+                <div
+                  key={env.id}
+                  className="px-4 py-4 space-y-3"
+                >
+                  <p className="text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground/70">
+                    {env.name}
+                  </p>
+
+                  {/* Rule 1 — Country targeting */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex shrink-0 flex-col items-center self-stretch">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-border text-[0.6rem] font-medium text-muted-foreground">
+                        1
+                      </span>
+                      <div className="w-px flex-1 bg-border/60 my-0.5" />
+                    </div>
+                    <div className="flex flex-1 items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm leading-tight">Country targeting</p>
+                        <p className="text-[0.7rem] text-muted-foreground mt-0.5">Allow traffic from specific countries</p>
+                      </div>
+                      {isAdmin ? (
+                        <CountryPicker
+                          selected={d.countries}
+                          allCountries={d.allCountries}
+                          onChange={(val) => patchDraft(env.id, val)}
+                          disabled={saving}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {d.allCountries ? 'All countries' : d.countries.length === 0 ? 'None' : d.countries.join(', ')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Rule 2 — Enable */}
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border text-[0.6rem] font-medium text-muted-foreground">
+                      2
+                    </span>
+                    <div className="flex flex-1 items-center justify-between">
+                      <div>
+                        <p className="text-sm leading-tight">Enable</p>
+                        <p className="text-[0.7rem] text-muted-foreground mt-0.5">Roll out to matching users</p>
+                      </div>
+                      <Switch
+                        checked={d.enabled}
+                        onCheckedChange={(v) => isAdmin && patchDraft(env.id, { enabled: !!v })}
+                        disabled={!isAdmin || saving}
+                        aria-label={`Toggle ${flag?.name} in ${env.name}`}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="-mx-0 flex items-center justify-between gap-2 rounded-b-xl border-t bg-muted/50 px-4 py-3">
+          <span className="font-mono text-[0.6875rem] text-muted-foreground/60">{flag?.key}</span>
+          <div className="flex items-center gap-1.5">
+            <Button type="button" variant="outline" size="sm" onClick={handleCancel} disabled={saving}>
+              Cancel
+            </Button>
+            <Button type="button" size="sm" onClick={handleSave} disabled={saving || !isDirtyGlobal}>
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )
@@ -352,7 +775,7 @@ export function FlagsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [flagToDelete, setFlagToDelete] = useState<FlagRow | null>(null)
   const [flagToEdit, setFlagToEdit] = useState<FlagRow | null>(null)
-  const [flagToRollout, setFlagToRollout] = useState<FlagRow | null>(null)
+  const [flagToTarget, setFlagToTarget] = useState<FlagRow | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -457,8 +880,8 @@ export function FlagsPage() {
                   <DropdownMenuItem onClick={() => setFlagToEdit(flag)}>
                     Edit
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setFlagToRollout(flag)}>
-                    Rollout
+                  <DropdownMenuItem onClick={() => setFlagToTarget(flag)}>
+                    Configure
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -686,14 +1109,14 @@ export function FlagsPage() {
         onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
       />
 
-      <RolloutDialog
-        flag={flagToRollout}
+      <TargetingDialog
+        flag={flagToTarget}
         orgSlug={org.slug}
         environments={environments}
         isAdmin={isAdmin}
-        open={!!flagToRollout}
-        onOpenChange={(v) => { if (!v) setFlagToRollout(null) }}
-        onToggle={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+        open={!!flagToTarget}
+        onOpenChange={(v) => { if (!v) setFlagToTarget(null) }}
+        onChanged={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
       />
 
       <EditFlagDialog
@@ -703,6 +1126,7 @@ export function FlagsPage() {
         onOpenChange={(v) => { if (!v) setFlagToEdit(null) }}
         onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
       />
+
 
       <AlertDialog open={!!flagToDelete} onOpenChange={(open) => { if (!open) setFlagToDelete(null) }}>
         <AlertDialogContent>

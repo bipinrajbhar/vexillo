@@ -8,6 +8,7 @@ export type FlagRow = {
   createdAt: string
   createdByName: string | null
   states: Record<string, boolean>
+  countryRules: Record<string, string[]>
 }
 
 export type EnvRef = { id: string; name: string; slug: string }
@@ -89,6 +90,12 @@ export const api = {
       call<{ enabled: boolean }>(
         `/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}/toggle`,
         { method: 'POST', ...json({ environmentId }) },
+      ),
+
+    updateCountryRules: (orgSlug: string, key: string, environmentId: string, countries: string[]) =>
+      call<{ countries: string[] }>(
+        `/api/dashboard/${orgSlug}/flags/${encodeURIComponent(key)}/environments/${encodeURIComponent(environmentId)}/country-rules`,
+        { method: 'PUT', ...json({ countries }) },
       ),
   },
 

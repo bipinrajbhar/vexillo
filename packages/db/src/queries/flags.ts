@@ -10,6 +10,7 @@ export type FlagWithStates = {
   createdAt: Date;
   createdByName: string | null;
   states: Record<string, boolean>;
+  countryRules: Record<string, string[]>;
 };
 
 export type EnvRef = { id: string; name: string; slug: string };
@@ -31,6 +32,7 @@ export async function queryOrgFlagsWithStates(
         createdByName: authUser.name,
         envSlug: environments.slug,
         enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
+        allowedCountries: sql<string[]>`COALESCE(${flagStates.allowedCountries}, '{}'::text[])`,
       })
       .from(flags)
       .crossJoin(environments)
@@ -59,9 +61,11 @@ export async function queryOrgFlagsWithStates(
         createdAt: row.createdAt,
         createdByName: row.createdByName ?? null,
         states: {},
+        countryRules: {},
       });
     }
     flagMap.get(row.key)!.states[row.envSlug] = row.enabled;
+    flagMap.get(row.key)!.countryRules[row.envSlug] = row.allowedCountries ?? [];
   }
 
   return { flags: Array.from(flagMap.values()), environments: envRows };
@@ -114,6 +118,7 @@ export async function queryFlagByKey(
       createdAt: first.createdAt,
       createdByName: first.createdByName ?? null,
       states,
+      countryRules: {},
     },
     rollout,
   };
@@ -188,4 +193,38 @@ export async function toggleFlag(
     .returning({ enabled: flagStates.enabled });
 
   return { enabled: state.enabled };
+}
+
+export async function setFlagCountryRules(
+  db: DbClient,
+  orgId: string,
+  key: string,
+  environmentId: string,
+  allowedCountries: string[],
+): Promise<{ before: string[]; after: string[] } | null> {
+  const [flag] = await db
+    .select({ id: flags.id })
+    .from(flags)
+    .where(and(eq(flags.key, key), eq(flags.orgId, orgId)));
+
+  if (!flag) return null;
+
+  const [current] = await db
+    .select({ allowedCountries: flagStates.allowedCountries })
+    .from(flagStates)
+    .where(and(eq(flagStates.flagId, flag.id), eq(flagStates.environmentId, environmentId)))
+    .limit(1);
+
+  const before = current?.allowedCountries ?? [];
+
+  const [updated] = await db
+    .insert(flagStates)
+    .values({ flagId: flag.id, environmentId, enabled: false, allowedCountries })
+    .onConflictDoUpdate({
+      target: [flagStates.flagId, flagStates.environmentId],
+      set: { allowedCountries },
+    })
+    .returning({ allowedCountries: flagStates.allowedCountries });
+
+  return { before, after: updated.allowedCountries };
 }

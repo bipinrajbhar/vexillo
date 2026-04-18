@@ -19,8 +19,8 @@ describe('VPC', () => {
     template.resourceCountIs('AWS::EC2::Subnet', 4);
   });
 
-  it('has exactly one NAT gateway', () => {
-    template.resourceCountIs('AWS::EC2::NatGateway', 1);
+  it('has no NAT gateways (ECS tasks use public subnets with assignPublicIp)', () => {
+    template.resourceCountIs('AWS::EC2::NatGateway', 0);
   });
 });
 
@@ -86,9 +86,9 @@ describe('ECS / ALB', () => {
     });
   });
 
-  it('creates an ALB with a health check on /health', () => {
+  it('creates an ALB with a health check on /api/health', () => {
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
-      HealthCheckPath: '/health',
+      HealthCheckPath: '/api/health',
     });
   });
 });
@@ -157,6 +157,20 @@ describe('CloudFront', () => {
         Name: 'vexillo-sdk-flags-30s',
         DefaultTTL: 30,
         MaxTTL: 60,
+      },
+    });
+  });
+
+  it('sdk-flags cache policy includes CloudFront-Viewer-Country in cache key', () => {
+    template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+      CachePolicyConfig: {
+        Name: 'vexillo-sdk-flags-30s',
+        ParametersInCacheKeyAndForwardedToOrigin: {
+          HeadersConfig: {
+            HeaderBehavior: 'whitelist',
+            Headers: Match.arrayWith(['CloudFront-Viewer-Country']),
+          },
+        },
       },
     });
   });
