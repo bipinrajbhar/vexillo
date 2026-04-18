@@ -450,6 +450,86 @@ describe('GET /api/sdk/flags/stream', () => {
     ]);
     await reader.cancel();
   });
+
+  it('applies geo evaluation to initial snapshot when CloudFront-Viewer-Country header is present', async () => {
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: false, allowedCountries: ['US', 'CA'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          'CloudFront-Viewer-Country': 'US',
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    const dataLine = text.split('\n').find((l) => l.startsWith('data: '))!;
+    const payload = JSON.parse(dataLine.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(payload.flags).toEqual([{ key: 'geo-flag', enabled: true }]);
+    await reader.cancel();
+  });
+
+  it('applies per-connection geo evaluation when streamRegistry broadcasts a country-rules update', async () => {
+    let capturedSend: ((payload: string) => void) | null = null;
+    const mockRegistry = {
+      register: (_envId: string, send: (payload: string) => void) => {
+        capturedSend = send;
+        return () => {};
+      },
+      broadcast: () => {},
+    };
+
+    const db = makeSdkQueueDb([
+      [authRow()],
+      [{ key: 'geo-flag', enabled: false, allowedCountries: [] }],
+    ]);
+    const sdkRouter = createSdkRouter(db, mockRegistry as Parameters<typeof createSdkRouter>[1]);
+    const app = new Hono();
+    app.get('/health', (c) => c.json({ status: 'ok' }));
+    app.route('/api/sdk', sdkRouter);
+
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          'CloudFront-Viewer-Country': 'US',
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+
+    // Consume the initial snapshot (no rules yet → geo-flag disabled)
+    const { value: initVal } = await reader.read();
+    const initText = new TextDecoder().decode(initVal);
+    const initData = JSON.parse(initText.split('\n').find((l) => l.startsWith('data: '))!.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(initData.flags).toEqual([{ key: 'geo-flag', enabled: false }]);
+
+    // Simulate a country-rules update: geo-flag now whitelists US
+    capturedSend!(JSON.stringify({ flags: [{ key: 'geo-flag', enabled: false, allowedCountries: ['US'] }] }));
+
+    // The update should be geo-evaluated: US is in the list → enabled: true
+    const { value: updVal } = await reader.read();
+    const updText = new TextDecoder().decode(updVal);
+    const updData = JSON.parse(updText.split('\n').find((l) => l.startsWith('data: '))!.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(updData.flags).toEqual([{ key: 'geo-flag', enabled: true }]);
+
+    await reader.cancel();
+  });
 });
 
 describe('Security headers', () => {

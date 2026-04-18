@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq, and, asc, sql } from 'drizzle-orm';
-import { apiKeys, environments, organizations, flags, flagStates, queryEnvironmentFlagStates } from '@vexillo/db';
+import { eq } from 'drizzle-orm';
+import { apiKeys, environments, organizations, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
 import type { StreamRegistry } from '../lib/stream-registry';
@@ -255,29 +255,25 @@ export function createSdkRouter(
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    // Snapshot: cache is written on every flag toggle; DB only on cold miss.
-    let snapshot = cache.get(auth.environmentId);
-    if (!snapshot) {
-      const rows = await db
-        .select({
-          key: flags.key,
-          enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
-        })
-        .from(flags)
-        .leftJoin(
-          flagStates,
-          and(
-            eq(flagStates.flagId, flags.id),
-            eq(flagStates.environmentId, auth.environmentId),
-          ),
-        )
-        .orderBy(asc(flags.key));
+    // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
+    const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
 
-      snapshot = JSON.stringify({
-        flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
-      });
-      cache.set(auth.environmentId, snapshot);
+    // Use rawCache (shared with the REST endpoint) so SSE and /flags share one warm cache.
+    let rawRows = rawCache.get(auth.environmentId);
+    if (!rawRows) {
+      rawRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
+      rawCache.set(auth.environmentId, rawRows);
     }
+    const snapshot = JSON.stringify({
+      flags: rawRows.map((r) => ({
+        key: r.key,
+        enabled: evaluateCountryRule({
+          allowedCountries: r.allowedCountries ?? [],
+          countryCode,
+          envEnabled: r.enabled,
+        }),
+      })),
+    });
 
     const encoder = new TextEncoder();
 
@@ -330,7 +326,18 @@ export function createSdkRouter(
 
     if (streamRegistry) {
       unregisterStream = streamRegistry.register(auth.environmentId, (payload) => {
-        writer.write(buildEvent(payload)).catch(() => {});
+        const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean; allowedCountries?: string[] }> };
+        const evaluated = JSON.stringify({
+          flags: parsed.flags.map((f) => ({
+            key: f.key,
+            enabled: evaluateCountryRule({
+              allowedCountries: f.allowedCountries ?? [],
+              countryCode,
+              envEnabled: f.enabled,
+            }),
+          })),
+        });
+        writer.write(buildEvent(evaluated)).catch(() => {});
       });
     }
 
