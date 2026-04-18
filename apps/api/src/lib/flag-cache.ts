@@ -2,7 +2,7 @@ import { LRUCache } from 'lru-cache';
 
 type FlagRow = { key: string; enabled: boolean };
 
-export function createFlagCache(ttlMs = 5_000, max = 500) {
+export function createFlagCache(ttlMs = 30_000, max = 500) {
   const store = new LRUCache<string, FlagRow[]>({ max, ttl: ttlMs });
 
   return {
