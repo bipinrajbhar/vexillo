@@ -232,7 +232,6 @@ export class VexilloStack extends cdk.Stack {
     const sdkOriginRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'SdkOriginRequestPolicy', {
       originRequestPolicyName: 'vexillo-sdk-forward-country',
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
-        'Authorization',
         'CloudFront-Viewer-Country',
         'Origin',
         'Last-Event-ID',
