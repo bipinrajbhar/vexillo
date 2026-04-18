@@ -226,6 +226,21 @@ export class VexilloStack extends cdk.Stack {
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
     });
 
+    // SDK-specific policy: explicitly forwards CloudFront-Viewer-Country (a
+    // CloudFront-generated header excluded from OriginRequestHeaderBehavior.all())
+    // so the origin can apply geo-targeted flag evaluation.
+    const sdkOriginRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'SdkOriginRequestPolicy', {
+      originRequestPolicyName: 'vexillo-sdk-forward-country',
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
+        'Authorization',
+        'CloudFront-Viewer-Country',
+        'Origin',
+        'Last-Event-ID',
+      ),
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.none(),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+    });
+
     // ── CloudFront Response Headers Policy (SPA only) ─────────────────────────
     // Applied to the default (S3) behavior so every SPA page response gets
     // security headers. The /api/* behaviors are excluded — Hono handles its
@@ -296,8 +311,16 @@ export class VexilloStack extends cdk.Stack {
           origin: albOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: sdkFlagsCachePolicy,
-          originRequestPolicy: apiOriginRequestPolicy,
+          originRequestPolicy: sdkOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          compress: false,
+        },
+        '/api/sdk/flags/stream': {
+          origin: albOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: apiCachePolicy,
+          originRequestPolicy: sdkOriginRequestPolicy,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           compress: false,
         },
         '/api/*': {
