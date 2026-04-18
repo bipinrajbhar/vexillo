@@ -3,12 +3,11 @@ import { eq } from 'drizzle-orm';
 import { apiKeys, environments, organizations, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
-import type { StreamRegistry } from '../lib/stream-registry';
-import type { AuthCache } from '../lib/auth-cache';
 import { createSnapshotCache } from '../lib/snapshot-cache';
-import type { SnapshotCache } from '../lib/snapshot-cache';
-import { createFlagCache } from '../lib/flag-cache';
 import { evaluateCountryRule } from '../lib/evaluate-country-rule';
+import type { StreamRegistry } from '../lib/stream-registry';
+import type { AuthCache, AuthEntry } from '../lib/auth-cache';
+import type { SnapshotCache } from '../lib/snapshot-cache';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -36,6 +35,107 @@ function resolveAllowedOrigin(
   if (allowedOrigins.includes('*')) return '*';
   if (allowedOrigins.includes(requestOrigin)) return requestOrigin;
   return null;
+}
+
+// Parses the raw snapshot (which includes allowedCountries) and returns a
+// client-safe JSON string with geo-evaluated enabled values.
+function evaluateSnapshot(
+  snapshot: string,
+  countryCode: string | null,
+): string {
+  const { flags } = JSON.parse(snapshot) as {
+    flags: Array<{ key: string; enabled: boolean; allowedCountries?: string[] }>;
+  };
+  return JSON.stringify({
+    flags: flags.map((r) => ({
+      key: r.key,
+      enabled: evaluateCountryRule({
+        allowedCountries: r.allowedCountries ?? [],
+        countryCode,
+        envEnabled: r.enabled,
+      }),
+    })),
+  });
+}
+
+// Resolves auth using the raw token as the in-memory cache key (avoids an
+// async SHA-256 on every cache hit — hash is only computed on DB miss).
+// Stale entries are served immediately; a background refresh prevents TTL
+// expiry from causing a synchronous latency spike.
+async function resolveAuth(
+  db: DbClient,
+  token: string,
+  authCache: AuthCache | undefined,
+): Promise<AuthEntry | null> {
+  const cached = authCache?.get(token) ?? null;
+  if (cached) {
+    if (authCache?.isStale(token)) {
+      hashKey(token)
+        .then((hash) =>
+          db
+            .select({
+              environmentId: apiKeys.environmentId,
+              orgId: environments.orgId,
+              allowedOrigins: environments.allowedOrigins,
+              orgStatus: organizations.status,
+            })
+            .from(apiKeys)
+            .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
+            .innerJoin(organizations, eq(organizations.id, environments.orgId))
+            .where(eq(apiKeys.keyHash, hash))
+            .limit(1),
+        )
+        .then(([row]) => {
+          if (row) authCache!.set(token, row);
+        })
+        .catch(() => {});
+    }
+    return cached;
+  }
+  const hash = await hashKey(token);
+  const [row] = await db
+    .select({
+      environmentId: apiKeys.environmentId,
+      orgId: environments.orgId,
+      allowedOrigins: environments.allowedOrigins,
+      orgStatus: organizations.status,
+    })
+    .from(apiKeys)
+    .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
+    .innerJoin(organizations, eq(organizations.id, environments.orgId))
+    .where(eq(apiKeys.keyHash, hash))
+    .limit(1);
+  if (!row) return null;
+  authCache?.set(token, row);
+  return row;
+}
+
+// Returns the raw flag snapshot for an environment (JSON string including
+// allowedCountries for geo evaluation). Uses snapshotCache as the source of
+// truth — it is updated on every flag toggle via notifyFlagChange, so DB is
+// only hit on a cold miss. Stale entries are served immediately with a
+// background refresh so TTL expiry never causes a synchronous latency spike.
+async function resolveRawSnapshot(
+  db: DbClient,
+  orgId: string,
+  environmentId: string,
+  snapshotCache: SnapshotCache,
+): Promise<string> {
+  const cached = snapshotCache.get(environmentId);
+  if (cached) {
+    if (snapshotCache.isStale(environmentId)) {
+      queryEnvironmentFlagStates(db, orgId, environmentId)
+        .then((rows) => {
+          snapshotCache.set(environmentId, JSON.stringify({ flags: rows }));
+        })
+        .catch(() => {});
+    }
+    return cached;
+  }
+  const rows = await queryEnvironmentFlagStates(db, orgId, environmentId);
+  const snapshot = JSON.stringify({ flags: rows });
+  snapshotCache.set(environmentId, snapshot);
+  return snapshot;
 }
 
 // ── OpenAPI schemas ───────────────────────────────────────────────────────────
@@ -100,10 +200,9 @@ export function createSdkRouter(
   authCache?: AuthCache,
   snapshotCache?: SnapshotCache,
 ) {
-  // snapshotCache: serialized JSON strings for SSE streams (per environment)
-  const cache = snapshotCache ?? createSnapshotCache();
-  // rawCache: raw flag rows for the REST /flags endpoint (geo-eval happens per-request)
-  const rawCache = createFlagCache();
+  // Default internal cache when none is injected (e.g. in tests). Production
+  // passes in a shared instance so the cache is invalidated by notifyFlagChange.
+  const _snapshotCache = snapshotCache ?? createSnapshotCache();
 
   const sdk = new OpenAPIHono();
 
@@ -161,28 +260,9 @@ export function createSdkRouter(
       return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
     }
 
-    const hash = await hashKey(token);
-
-    let auth = authCache?.get(hash) ?? null;
+    const auth = await resolveAuth(db, token, authCache);
     if (!auth) {
-      const [row] = await db
-        .select({
-          environmentId: apiKeys.environmentId,
-          orgId: environments.orgId,
-          allowedOrigins: environments.allowedOrigins,
-          orgStatus: organizations.status,
-        })
-        .from(apiKeys)
-        .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
-        .innerJoin(organizations, eq(organizations.id, environments.orgId))
-        .where(eq(apiKeys.keyHash, hash))
-        .limit(1);
-
-      if (!row) {
-        return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
-      }
-      auth = row;
-      authCache?.set(hash, auth);
+      return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
     }
 
     if (auth.orgStatus === 'suspended') {
@@ -199,29 +279,19 @@ export function createSdkRouter(
     // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
     const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
 
-    let rawRows = rawCache.get(auth.environmentId);
-    if (!rawRows) {
-      rawRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
-      rawCache.set(auth.environmentId, rawRows);
-    }
+    const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _snapshotCache);
+    const snapshot = evaluateSnapshot(rawSnapshot, countryCode);
 
-    const evaluatedFlags = rawRows.map((r) => ({
-      key: r.key,
-      enabled: evaluateCountryRule({
-        allowedCountries: r.allowedCountries ?? [],
-        countryCode,
-        envEnabled: r.enabled,
-      }),
-    }));
-
-    const headers = {
-      'Access-Control-Allow-Origin': allowedOrigin,
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 's-maxage=30, stale-while-revalidate=60',
-    };
-
-    return c.json({ flags: evaluatedFlags }, 200, headers);
+    return new Response(snapshot, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': allowedOrigin,
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Cache-Control': 's-maxage=30, stale-while-revalidate=60',
+      },
+    });
   });
 
   sdk.get('/flags/stream', async (c) => {
@@ -233,29 +303,9 @@ export function createSdkRouter(
       return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
     }
 
-    const hash = await hashKey(token);
-
-    // Auth: in-memory cache → single combined DB round-trip on miss.
-    let auth = authCache?.get(hash) ?? null;
+    const auth = await resolveAuth(db, token, authCache);
     if (!auth) {
-      const [row] = await db
-        .select({
-          environmentId: apiKeys.environmentId,
-          orgId: environments.orgId,
-          allowedOrigins: environments.allowedOrigins,
-          orgStatus: organizations.status,
-        })
-        .from(apiKeys)
-        .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
-        .innerJoin(organizations, eq(organizations.id, environments.orgId))
-        .where(eq(apiKeys.keyHash, hash))
-        .limit(1);
-
-      if (!row) {
-        return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
-      }
-      auth = row;
-      authCache?.set(hash, auth);
+      return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
     }
 
     if (auth.orgStatus === 'suspended') {
@@ -269,25 +319,11 @@ export function createSdkRouter(
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
+    // Capture viewer country at connection time for per-connection geo evaluation.
     const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
 
-    // Use rawCache (shared with the REST endpoint) so SSE and /flags share one warm cache.
-    let rawRows = rawCache.get(auth.environmentId);
-    if (!rawRows) {
-      rawRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
-      rawCache.set(auth.environmentId, rawRows);
-    }
-    const snapshot = JSON.stringify({
-      flags: rawRows.map((r) => ({
-        key: r.key,
-        enabled: evaluateCountryRule({
-          allowedCountries: r.allowedCountries ?? [],
-          countryCode,
-          envEnabled: r.enabled,
-        }),
-      })),
-    });
+    // Snapshot: updated on every flag toggle via notifyFlagChange; DB only on cold miss.
+    const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _snapshotCache);
 
     const encoder = new TextEncoder();
 
@@ -336,22 +372,13 @@ export function createSdkRouter(
 
     // Send initial snapshot with retry hint so clients know the preferred
     // reconnect delay without waiting for a failed attempt.
-    await writer.write(buildEvent(snapshot, 1000));
+    await writer.write(buildEvent(evaluateSnapshot(rawSnapshot, countryCode), 1000));
 
     if (streamRegistry) {
       unregisterStream = streamRegistry.register(auth.environmentId, (payload) => {
-        const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean; allowedCountries?: string[] }> };
-        const evaluated = JSON.stringify({
-          flags: parsed.flags.map((f) => ({
-            key: f.key,
-            enabled: evaluateCountryRule({
-              allowedCountries: f.allowedCountries ?? [],
-              countryCode,
-              envEnabled: f.enabled,
-            }),
-          })),
-        });
-        writer.write(buildEvent(evaluated)).catch(() => {});
+        // Each connection evaluates geo independently so different viewer
+        // countries see the correct enabled state for their location.
+        writer.write(buildEvent(evaluateSnapshot(payload, countryCode))).catch(() => {});
       });
     }
 

@@ -5,7 +5,7 @@ type FlagRow = { key: string; enabled: boolean; allowedCountries?: string[] };
 export type FlagCache = ReturnType<typeof createFlagCache>;
 
 export function createFlagCache(ttlMs = 30_000, max = 500) {
-  const store = new LRUCache<string, FlagRow[]>({ max, ttl: ttlMs });
+  const store = new LRUCache<string, FlagRow[]>({ max, ttl: ttlMs, allowStale: true, noDeleteOnStaleGet: true });
 
   return {
     get(environmentId: string): FlagRow[] | null {
@@ -16,6 +16,9 @@ export function createFlagCache(ttlMs = 30_000, max = 500) {
     },
     delete(environmentId: string): void {
       store.delete(environmentId);
+    },
+    isStale(environmentId: string): boolean {
+      return store.has(environmentId) && store.getRemainingTTL(environmentId) === 0;
     },
   };
 }

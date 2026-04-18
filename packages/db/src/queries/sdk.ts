@@ -1,4 +1,4 @@
-import { eq, and, asc, sql } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { apiKeys, environments, organizations, flags, flagStates } from '../schema';
 import type { DbClient } from '../client';
 
@@ -46,6 +46,5 @@ export async function queryEnvironmentFlagStates(
       flagStates,
       and(eq(flagStates.flagId, flags.id), eq(flagStates.environmentId, environmentId)),
     )
-    .where(eq(flags.orgId, orgId))
-    .orderBy(asc(flags.key));
+    .where(eq(flags.orgId, orgId));
 }
