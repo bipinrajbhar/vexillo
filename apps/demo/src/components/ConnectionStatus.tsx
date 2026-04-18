@@ -1,8 +1,14 @@
-import React from "react";
+import React, { useEffect, useReducer } from "react";
 import { useVexilloClient } from "@vexillo/react-sdk";
 
 export function ConnectionStatus() {
   const client = useVexilloClient();
+  const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
+
+  useEffect(() => {
+    return client.subscribeAll(() => forceUpdate());
+  }, [client]);
+
   return (
     <div style={{ fontSize: "0.875rem", color: "#555" }}>
       {client.isReady ? (
