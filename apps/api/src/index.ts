@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { Scalar } from '@scalar/hono-api-reference';
 import { createDbClient } from '@vexillo/db';
-import { createSdkRouter, StreamRegistry, SDK_OPENAPI_CONFIG } from './routes/sdk';
+import { createSdkRouter, SDK_OPENAPI_CONFIG } from './routes/sdk';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
@@ -16,8 +16,7 @@ if (!DATABASE_URL) {
 
 const db = createDbClient(DATABASE_URL, { max: 10 });
 const auth = createAuth(db);
-const streamRegistry = new StreamRegistry();
-const dashboardService = createDashboardService(db, streamRegistry);
+const dashboardService = createDashboardService(db);
 
 const app = new Hono();
 
@@ -58,7 +57,7 @@ app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable
-const sdkRouter = createSdkRouter(db, streamRegistry);
+const sdkRouter = createSdkRouter(db);
 app.route('/api/sdk', sdkRouter);
 
 // OpenAPI spec + interactive docs (unauthenticated; internal use only)

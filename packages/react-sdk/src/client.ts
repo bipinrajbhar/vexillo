@@ -14,12 +14,6 @@ export interface VexilloClientConfig {
 export interface VexilloClient {
   /** Fetches flags from the server and notifies subscribers. */
   load(): Promise<void>;
-  /**
-   * Opens an SSE connection to /api/sdk/flags/stream and applies flag updates
-   * in real-time. Reconnects automatically with exponential backoff on disconnect.
-   * Returns a function that closes the stream and stops reconnecting.
-   */
-  connectStream(): () => void;
   /** Synchronous read. Priority: overrides > remote > fallbacks > false. */
   getFlag(key: string): boolean;
   /** Snapshot of all resolved flags (overrides + remote + fallbacks merged). */
@@ -144,68 +138,8 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     for (const key of affected) notifyKey(key);
   }
 
-  function connectStream(): () => void {
-    let stopped = false;
-    let controller: AbortController | null = null;
-    let retryDelay = 1000;
-
-    async function connect(): Promise<void> {
-      if (stopped) return;
-      controller = new AbortController();
-      try {
-        const res = await fetch(`${baseUrl}/api/sdk/flags/stream`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: controller.signal,
-        });
-        if (!res.ok || !res.body) throw new Error(`Stream responded ${res.status}`);
-        retryDelay = 1000;
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split('\n\n');
-          buf = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line || line.startsWith(':')) continue;
-            if (line.startsWith('data: ')) {
-              try {
-                const parsed = JSON.parse(line.slice(6)) as { flags: { key: string; enabled: boolean }[] };
-                remoteFlags = Object.fromEntries(parsed.flags.map((f) => [f.key, f.enabled]));
-                ready = true;
-                error = null;
-                notifyAll();
-              } catch { /* malformed event */ }
-            }
-          }
-        }
-      } catch (err) {
-        if (stopped) return;
-        error = err instanceof Error ? err : new Error(String(err));
-        onError?.(error);
-      }
-
-      if (!stopped) {
-        setTimeout(connect, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 30_000);
-      }
-    }
-
-    connect();
-    return () => {
-      stopped = true;
-      controller?.abort();
-    };
-  }
-
   return {
     load,
-    connectStream,
     getFlag,
     getAllFlags,
     subscribe,

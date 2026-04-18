@@ -2,7 +2,7 @@ import { describe, it, expect, mock } from 'bun:test';
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { Scalar } from '@scalar/hono-api-reference';
-import { createSdkRouter, StreamRegistry, SDK_OPENAPI_CONFIG } from './sdk';
+import { createSdkRouter, SDK_OPENAPI_CONFIG } from './sdk';
 
 // Minimal mock DB that satisfies the shape used by createSdkRouter.
 // All queries return empty arrays — used for error-path tests.
@@ -60,12 +60,12 @@ function authRow(overrides: Record<string, unknown> = {}) {
 function makeApp(db: Parameters<typeof createSdkRouter>[0]) {
   const app = new Hono();
   app.get('/health', (c) => c.json({ status: 'ok' }));
-  app.route('/api/sdk', createSdkRouter(db, new StreamRegistry()));
+  app.route('/api/sdk', createSdkRouter(db));
   return app;
 }
 
 function makeDocsApp(db: Parameters<typeof createSdkRouter>[0]) {
-  const sdkRouter = createSdkRouter(db, new StreamRegistry());
+  const sdkRouter = createSdkRouter(db);
   const app = new Hono();
   app.route('/api/sdk', sdkRouter);
   app.get('/api/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
@@ -93,7 +93,7 @@ function makeSecureApp(db: Parameters<typeof createSdkRouter>[0]) {
     }),
   );
   app.get('/health', (c) => c.json({ status: 'ok' }));
-  app.route('/api/sdk', createSdkRouter(db, new StreamRegistry()));
+  app.route('/api/sdk', createSdkRouter(db));
   return app;
 }
 

@@ -61,14 +61,14 @@ Within `/api/dashboard/*`, most endpoints require an active org session. Role-sp
 
 ## Caching
 
-Two layers of caching apply to the SDK flags endpoint:
+Two layers of caching apply to `GET /api/sdk/flags`:
 
 | Layer | Where | TTL | Details |
 |-------|-------|-----|---------|
-| In-process LRU | API container | 30 s | `createFlagCache()` (`lib/flag-cache.ts`) — up to 500 environments, keyed by `environmentId`. Matches the CloudFront TTL so DB load is minimised across the full cache window. |
-| HTTP / CDN | Browser + CloudFront | 30 s fresh, 60 s stale | `Cache-Control: s-maxage=30, stale-while-revalidate=60` on `GET /api/sdk/flags` responses. CloudFront caches per `Authorization` header. |
+| In-process LRU | API container | 30 s | `createFlagCache()` (`lib/flag-cache.ts`) — up to 500 environments, keyed by `environmentId`. Matches the CDN TTL so DB load is minimised across the full cache window. |
+| HTTP / CDN | Browser + CloudFront | 30 s | `Cache-Control: s-maxage=30`. CloudFront caches per `Authorization` header. |
 
-The OpenAPI spec is also cached at the HTTP layer:
+The OpenAPI spec has a longer cache:
 
 | Route | Cache-Control |
 |-------|---------------|

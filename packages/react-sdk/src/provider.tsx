@@ -34,11 +34,8 @@ export function VexilloClientProvider({
 
   useEffect(() => {
     const unsub = client.subscribeAll(() => forceUpdate());
-    const disconnect = client.connectStream();
-    return () => {
-      unsub();
-      disconnect();
-    };
+    if (!client.isReady) client.load();
+    return unsub;
   }, [client]);
 
   return (
