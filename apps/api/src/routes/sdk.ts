@@ -3,7 +3,6 @@ import { eq, and, asc, sql } from 'drizzle-orm';
 import { apiKeys, environments, organizations, flags, flagStates, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
-import { createFlagCache } from '../lib/flag-cache';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -77,7 +76,6 @@ const getFlagsRoute = createRoute({
 
 export function createSdkRouter(db: DbClient) {
   const sdk = new OpenAPIHono();
-  const flagCache = createFlagCache();
 
   // Register Bearer auth security scheme so it appears in the generated spec.
   sdk.openAPIRegistry.registerComponent('securitySchemes', 'BearerAuth', {
@@ -131,15 +129,13 @@ export function createSdkRouter(db: DbClient) {
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    const cached = flagCache.get(auth.environmentId);
-    const flagRows = cached ?? await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
-    if (!cached) flagCache.set(auth.environmentId, flagRows);
+    const flagRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
 
     const headers = {
       'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 's-maxage=30',
+      'Cache-Control': 'no-store',
     };
 
     return c.json(

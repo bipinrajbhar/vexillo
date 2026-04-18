@@ -61,20 +61,12 @@ Within `/api/dashboard/*`, most endpoints require an active org session. Role-sp
 
 ## Caching
 
-Two layers of caching apply to `GET /api/sdk/flags`:
-
-| Layer | Where | TTL | Details |
-|-------|-------|-----|---------|
-| In-process LRU | API container | 30 s | `createFlagCache()` (`lib/flag-cache.ts`) — up to 500 environments, keyed by `environmentId`. Matches the CDN TTL so DB load is minimised across the full cache window. |
-| HTTP / CDN | Browser + CloudFront | 30 s | `Cache-Control: s-maxage=30`. CloudFront caches per `Authorization` header. |
-
-The OpenAPI spec has a longer cache:
+The dashboard service caches flags, environments, and members in-process (LRU, 30s TTL, keyed by `orgId`) with write-through invalidation on every mutation. All other routes are uncached.
 
 | Route | Cache-Control |
 |-------|---------------|
 | `GET /api/openapi.json` | `public, max-age=300, stale-while-revalidate=60` |
-
-All other routes (`/api/auth/*`, `/api/dashboard/*`, `/api/superadmin/*`) are uncached — they carry session state or mutate data.
+| `GET /api/sdk/flags` | `no-store` — always fresh from DB |
 
 ## Auth
 
