@@ -61,8 +61,9 @@ const sdkRouter = createSdkRouter(db);
 app.route('/api/sdk', sdkRouter);
 
 // OpenAPI spec + interactive docs (unauthenticated; internal use only)
-app.get('/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
-app.get('/docs', Scalar({ url: '/openapi.json' }));
+// Must be under /api/* so CloudFront forwards them to the ALB instead of S3.
+app.get('/api/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
+app.get('/api/docs', Scalar({ url: '/api/openapi.json' }));
 
 // Dashboard routes — session auth required
 app.route(

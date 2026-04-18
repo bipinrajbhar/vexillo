@@ -68,8 +68,8 @@ function makeDocsApp(db: Parameters<typeof createSdkRouter>[0]) {
   const sdkRouter = createSdkRouter(db);
   const app = new Hono();
   app.route('/api/sdk', sdkRouter);
-  app.get('/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
-  app.get('/docs', Scalar({ url: '/openapi.json' }));
+  app.get('/api/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
+  app.get('/api/docs', Scalar({ url: '/api/openapi.json' }));
   return app;
 }
 
@@ -453,10 +453,10 @@ describe('GET /openapi.json', () => {
   });
 });
 
-describe('GET /docs', () => {
+describe('GET /api/docs', () => {
   it('returns 200 with text/html content-type', async () => {
     const app = makeDocsApp(makeMockDb());
-    const res = await app.fetch(new Request('http://localhost/docs'));
+    const res = await app.fetch(new Request('http://localhost/api/docs'));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
   });
