@@ -59,8 +59,22 @@ const getFlagsRoute = createRoute({
   summary: 'Get feature flags for an environment',
   description:
     'Returns all flag states for the environment associated with the provided API key. ' +
-    'Authentication is via `Authorization: Bearer <api-key>`.',
+    'Authentication is via `Authorization: Bearer <api-key>`. ' +
+    'Pass `CloudFront-Viewer-Country` (ISO 3166-1 alpha-2, e.g. `US`) to get ' +
+    'geo-targeted flag states; omit to fall back to the environment toggle.',
   security: [{ BearerAuth: [] }],
+  request: {
+    headers: z.object({
+      'cloudfront-viewer-country': z
+        .string()
+        .length(2)
+        .optional()
+        .openapi({
+          description: 'ISO 3166-1 alpha-2 country code. Injected by CloudFront in production; pass manually in dev/Scalar.',
+          example: 'US',
+        }),
+    }),
+  },
   responses: {
     200: {
       content: { 'application/json': { schema: FlagsResponseSchema } },
