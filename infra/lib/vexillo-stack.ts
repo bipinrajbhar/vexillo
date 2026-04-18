@@ -200,9 +200,9 @@ export class VexilloStack extends cdk.Stack {
 
     // ── CloudFront cache policies ─────────────────────────────────────────────
     const sdkFlagsCachePolicy = new cloudfront.CachePolicy(this, 'SdkFlagsCachePolicy', {
-      cachePolicyName: 'vexillo-sdk-flags-30s',
-      defaultTtl: cdk.Duration.seconds(30),
-      maxTtl: cdk.Duration.seconds(60),
+      cachePolicyName: 'vexillo-sdk-flags-5m',
+      defaultTtl: cdk.Duration.seconds(300),
+      maxTtl: cdk.Duration.seconds(600),
       minTtl: cdk.Duration.seconds(0),
       headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization', 'CloudFront-Viewer-Country'),
       queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),

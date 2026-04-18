@@ -154,9 +154,23 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     let lastEventId: string | null = null;
     let retryMs = 1000;
     let backoffMs = retryMs;
+    let firstAttempt = true;
 
     async function attempt(): Promise<void> {
       if (!active) return;
+
+      if (firstAttempt) {
+        firstAttempt = false;
+        try {
+          remoteFlags = await fetchFlags(baseUrl, apiKey);
+          error = null;
+          ready = true;
+          notifyAll();
+        } catch {
+          // non-fatal: stream will deliver the initial snapshot shortly
+        }
+        if (!active) return;
+      }
 
       abortController = new AbortController();
       try {
