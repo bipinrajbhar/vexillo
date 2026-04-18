@@ -32,6 +32,7 @@ export async function resolveApiKey(
 
 export async function queryEnvironmentFlagStates(
   db: DbClient,
+  orgId: string,
   environmentId: string,
 ): Promise<{ key: string; enabled: boolean }[]> {
   return db
@@ -44,5 +45,6 @@ export async function queryEnvironmentFlagStates(
       flagStates,
       and(eq(flagStates.flagId, flags.id), eq(flagStates.environmentId, environmentId)),
     )
+    .where(eq(flags.orgId, orgId))
     .orderBy(asc(flags.key));
 }

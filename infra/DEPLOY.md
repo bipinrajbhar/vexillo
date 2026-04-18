@@ -5,7 +5,7 @@
 ```
 CloudFront (HTTPS)
 ├── /api/sdk/flags  ──► ALB ──► ECS Fargate (30s cache)
-├── /api/*          ──► ALB ──► ECS Fargate (no cache)
+├── /api/*          ──► ALB ──► ECS Fargate (no cache)  ← includes /api/docs, /api/openapi.json
 └── /*              ──► S3  ──► Vite SPA    (1y cache for assets, no-cache for index.html)
 ```
 

@@ -167,9 +167,13 @@ createDashboardService(db) → dashboardService
 app.route('/api/auth', auth.handler)
 app.route('/api/auth/org-oauth', orgOAuth(db, auth))
 app.route('/api/sdk', sdk(db))
+app.get('/api/openapi.json', openApiSpec)
+app.get('/api/docs', scalarUi)
 app.route('/api/dashboard', dashboard(db, dashboardService, getSession))
 app.route('/api/superadmin', superadmin(db, getSession))
 ```
+
+> **Note:** `/api/docs` and `/api/openapi.json` must be under `/api/*` so CloudFront forwards them to the ALB rather than serving them from the S3 SPA bucket.
 
 Each router receives exactly the dependencies it needs — no global state.
 

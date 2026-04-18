@@ -43,6 +43,8 @@ The API starts on `http://localhost:3000` with hot reload.
 | Prefix | Auth | Description |
 |--------|------|-------------|
 | `GET /health` | None | Health check for load balancers |
+| `GET /api/docs` | None | Interactive API docs (Scalar UI) |
+| `GET /api/openapi.json` | None | OpenAPI spec (JSON) |
 | `/api/auth/org-oauth/*` | None | Per-org Okta PKCE OAuth flow (authorize + callback) |
 | `/api/auth/*` | None | BetterAuth — session management |
 | `/api/sdk/*` | API key | Public SDK endpoint — flag states, CDN-cacheable |
@@ -56,6 +58,15 @@ Within `/api/dashboard/*`, most endpoints require an active org session. Role-sp
 - **All members (viewer + admin)** — read flags, environments, and members
 - **Admins** — manage flags, environments, API keys, view suspended members, and change member roles (cannot change super-admin roles)
 - **Super-admins** — suspend/restore members, manage orgs
+
+## Caching
+
+The dashboard service caches flags, environments, and members in-process (LRU, 30s TTL, keyed by `orgId`) with write-through invalidation on every mutation. All other routes are uncached.
+
+| Route | Cache-Control |
+|-------|---------------|
+| `GET /api/openapi.json` | `public, max-age=300, stale-while-revalidate=60` |
+| `GET /api/sdk/flags` | `no-store` — always fresh from DB |
 
 ## Auth
 

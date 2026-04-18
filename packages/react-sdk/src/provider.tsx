@@ -34,9 +34,7 @@ export function VexilloClientProvider({
 
   useEffect(() => {
     const unsub = client.subscribeAll(() => forceUpdate());
-    if (!client.isReady) {
-      client.load();
-    }
+    if (!client.isReady) client.load();
     return unsub;
   }, [client]);
 

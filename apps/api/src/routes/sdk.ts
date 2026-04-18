@@ -1,9 +1,8 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, and, asc, sql } from 'drizzle-orm';
-import { apiKeys, environments, organizations, flags, flagStates } from '@vexillo/db';
+import { apiKeys, environments, organizations, flags, flagStates, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
-import { createFlagCache } from '../lib/flag-cache';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -73,35 +72,10 @@ const getFlagsRoute = createRoute({
   },
 });
 
-const getFlagsStreamRoute = createRoute({
-  method: 'get',
-  path: '/flags/stream',
-  operationId: 'getFlagsStream',
-  summary: 'Feature flag SSE stream (keepalive stub)',
-  security: [{ BearerAuth: [] }],
-  description:
-    'Server-sent events stream. Currently a stub that emits a keepalive comment ' +
-    '(`: keepalive`) every 25 seconds to prevent CloudFront from closing the idle ' +
-    'connection (CloudFront read timeout is 60 s). Does not yet emit flag data.',
-  responses: {
-    200: {
-      content: {
-        'text/event-stream': {
-          schema: z.string().openapi({ example: ': keepalive' }),
-        },
-      },
-      description:
-        'SSE stream. Content-Type: text/event-stream; Cache-Control: no-cache; ' +
-        'Connection: keep-alive; Access-Control-Allow-Origin: *',
-    },
-  },
-});
-
 // ── Router factory ────────────────────────────────────────────────────────────
 
 export function createSdkRouter(db: DbClient) {
   const sdk = new OpenAPIHono();
-  const flagCache = createFlagCache();
 
   // Register Bearer auth security scheme so it appears in the generated spec.
   sdk.openAPIRegistry.registerComponent('securitySchemes', 'BearerAuth', {
@@ -155,35 +129,13 @@ export function createSdkRouter(db: DbClient) {
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    // Serve from in-process cache when available; flags change infrequently
-    // and s-maxage=30 on the response already tolerates short staleness.
-    let flagRows = flagCache.get(auth.environmentId);
-
-    if (!flagRows) {
-      flagRows = await db
-        .select({
-          key: flags.key,
-          enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
-        })
-        .from(flags)
-        .leftJoin(
-          flagStates,
-          and(
-            eq(flagStates.flagId, flags.id),
-            eq(flagStates.environmentId, auth.environmentId),
-          ),
-        )
-        .where(eq(flags.orgId, auth.orgId))
-        .orderBy(asc(flags.key));
-
-      flagCache.set(auth.environmentId, flagRows);
-    }
+    const flagRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
 
     const headers = {
       'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 's-maxage=30, stale-while-revalidate=60',
+      'Cache-Control': 'no-store',
     };
 
     return c.json(
@@ -191,41 +143,6 @@ export function createSdkRouter(db: DbClient) {
       200,
       headers,
     );
-  });
-
-  sdk.openapi(getFlagsStreamRoute, (c) => {
-    const encoder = new TextEncoder();
-    let interval: ReturnType<typeof setInterval>;
-
-    const body = new ReadableStream({
-      start(controller) {
-        const send = () =>
-          controller.enqueue(encoder.encode(': keepalive\n\n'));
-        send();
-        interval = setInterval(send, 25_000);
-
-        c.req.raw.signal.addEventListener('abort', () => {
-          clearInterval(interval);
-          try {
-            controller.close();
-          } catch {
-            // already closed
-          }
-        });
-      },
-      cancel() {
-        clearInterval(interval);
-      },
-    });
-
-    return new Response(body, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
   });
 
   return sdk;
