@@ -218,3 +218,61 @@ describe("VexilloClientProvider — overrides", () => {
     expect(screen.getByTestId("flag-b").textContent).toBe("false");
   });
 });
+
+describe("VexilloClientProvider — streaming prop", () => {
+  it("calls load() when streaming is absent, does not call connectStream()", () => {
+    const client = createMockVexilloClient({ flags: {} });
+    // Make isReady false so load() is triggered
+    const loadSpy = vi.spyOn(client, "load").mockResolvedValue(undefined);
+    const connectStreamSpy = vi.spyOn(client, "connectStream");
+    // Simulate a non-ready client by resetting ready state via load
+    // Use a real client that hasn't loaded yet
+    const freshClient = createVexilloClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+    const freshLoad = vi.spyOn(freshClient, "load").mockResolvedValue(undefined);
+    const freshConnectStream = vi.spyOn(freshClient, "connectStream");
+
+    render(
+      <VexilloClientProvider client={freshClient}>
+        <span />
+      </VexilloClientProvider>,
+    );
+
+    expect(freshLoad).toHaveBeenCalledOnce();
+    expect(freshConnectStream).not.toHaveBeenCalled();
+
+    void loadSpy;
+    void connectStreamSpy;
+  });
+
+  it("calls connectStream() when streaming=true, does not call load()", () => {
+    const disconnect = vi.fn();
+    const client = createMockVexilloClient({ flags: { feat: true } });
+    const connectStreamSpy = vi.spyOn(client, "connectStream").mockReturnValue(disconnect);
+    const loadSpy = vi.spyOn(client, "load");
+
+    render(
+      <VexilloClientProvider client={client} streaming>
+        <span />
+      </VexilloClientProvider>,
+    );
+
+    expect(connectStreamSpy).toHaveBeenCalledOnce();
+    expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("calls the disconnect function on unmount when streaming=true", () => {
+    const disconnect = vi.fn();
+    const client = createMockVexilloClient({ flags: {} });
+    vi.spyOn(client, "connectStream").mockReturnValue(disconnect);
+
+    const { unmount } = render(
+      <VexilloClientProvider client={client} streaming>
+        <span />
+      </VexilloClientProvider>,
+    );
+
+    expect(disconnect).not.toHaveBeenCalled();
+    unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+});

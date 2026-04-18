@@ -3,6 +3,7 @@ import { eq, and, asc, sql } from 'drizzle-orm';
 import { apiKeys, environments, organizations, flags, flagStates, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
+import type { StreamRegistry } from '../lib/stream-registry';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -74,13 +75,46 @@ const getFlagsRoute = createRoute({
 
 // ── Router factory ────────────────────────────────────────────────────────────
 
-export function createSdkRouter(db: DbClient) {
+export function createSdkRouter(db: DbClient, streamRegistry?: StreamRegistry) {
   const sdk = new OpenAPIHono();
 
   // Register Bearer auth security scheme so it appears in the generated spec.
   sdk.openAPIRegistry.registerComponent('securitySchemes', 'BearerAuth', {
     type: 'http',
     scheme: 'bearer',
+  });
+
+  // Stream endpoint registered via registerPath (not openapi() wrapper) so that
+  // the OpenAPI validation pipeline never touches the ReadableStream body.
+  sdk.openAPIRegistry.registerPath({
+    method: 'get',
+    path: '/flags/stream',
+    operationId: 'getFlagsStream',
+    summary: 'Feature flag SSE stream',
+    security: [{ BearerAuth: [] }],
+    description:
+      'Server-sent events stream. Sends the full flag snapshot as the first ' +
+      '`data:` event, then emits `: keepalive` comments every 25 s. ' +
+      'Auth mirrors the `/flags` endpoint.',
+    responses: {
+      200: {
+        content: {
+          'text/event-stream': {
+            schema: z.string().openapi({ example: 'data: {"flags":[{"key":"my-flag","enabled":true}]}\n\n' }),
+          },
+        },
+        description:
+          'SSE stream. Content-Type: text/event-stream; Cache-Control: no-cache.',
+      },
+      401: {
+        content: { 'application/json': { schema: ErrorSchema } },
+        description: 'Missing or invalid Bearer token',
+      },
+      403: {
+        content: { 'application/json': { schema: ErrorSchema } },
+        description: 'Org suspended or Origin not in the allowlist',
+      },
+    },
   });
 
   // Preflight — we can't check allowedOrigins without an API key, so we return
@@ -143,6 +177,145 @@ export function createSdkRouter(db: DbClient) {
       200,
       headers,
     );
+  });
+
+  sdk.get('/flags/stream', async (c) => {
+    const authHeader = c.req.header('authorization');
+    const token =
+      authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    if (!token) {
+      return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
+    }
+
+    const hash = await hashKey(token);
+
+    const [apiKey] = await db
+      .select({ environmentId: apiKeys.environmentId })
+      .from(apiKeys)
+      .where(eq(apiKeys.keyHash, hash))
+      .limit(1);
+
+    if (!apiKey) {
+      return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
+    }
+
+    const [env] = await db
+      .select({
+        id: environments.id,
+        allowedOrigins: environments.allowedOrigins,
+        orgStatus: organizations.status,
+      })
+      .from(environments)
+      .innerJoin(organizations, eq(organizations.id, environments.orgId))
+      .where(eq(environments.id, apiKey.environmentId))
+      .limit(1);
+
+    if (!env) {
+      return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
+    }
+
+    if (env.orgStatus === 'suspended') {
+      return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
+    }
+
+    const requestOrigin = c.req.header('origin');
+    const allowedOrigin = resolveAllowedOrigin(requestOrigin, env.allowedOrigins);
+
+    if (allowedOrigin === null) {
+      return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
+    }
+
+    const rows = await db
+      .select({
+        key: flags.key,
+        enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
+      })
+      .from(flags)
+      .leftJoin(
+        flagStates,
+        and(
+          eq(flagStates.flagId, flags.id),
+          eq(flagStates.environmentId, apiKey.environmentId),
+        ),
+      )
+      .orderBy(asc(flags.key));
+
+    const snapshot = JSON.stringify({
+      flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
+    });
+
+    const encoder = new TextEncoder();
+
+    // Use TransformStream + pull-based wrapper — the same pattern Hono's
+    // streamSSE uses internally. A push-only ReadableStream (start() + no pull())
+    // causes Bun to consider the response done after the first chunk is consumed,
+    // so subsequent enqueues (keepalive, Redis snapshots) close the connection.
+    const { readable, writable } = new TransformStream<Uint8Array>();
+    const writer = writable.getWriter();
+    const tsReader = readable.getReader();
+
+    let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
+    let unregisterStream: (() => void) | undefined;
+    let closed = false;
+    let eventId = 1;
+
+    // Continue the ID sequence if the client is reconnecting.
+    const lastEventIdHeader = c.req.header('last-event-id');
+    if (lastEventIdHeader) {
+      const parsed = parseInt(lastEventIdHeader, 10);
+      if (!isNaN(parsed)) eventId = parsed + 1;
+    }
+
+    function buildEvent(data: string, retryMs?: number): Uint8Array {
+      let msg = retryMs !== undefined ? `retry: ${retryMs}\n` : '';
+      msg += `id: ${eventId++}\n`;
+      msg += `data: ${data}\n\n`;
+      return encoder.encode(msg);
+    }
+
+    function cleanup() {
+      if (closed) return;
+      closed = true;
+      clearInterval(keepaliveInterval);
+      unregisterStream?.();
+      writer.close().catch(() => {});
+    }
+
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await tsReader.read();
+        done ? controller.close() : controller.enqueue(value);
+      },
+      cancel: cleanup,
+    });
+
+    // Send initial snapshot with retry hint so clients know the preferred
+    // reconnect delay without waiting for a failed attempt.
+    await writer.write(buildEvent(snapshot, 1000));
+
+    if (streamRegistry) {
+      unregisterStream = streamRegistry.register(env.id, (payload) => {
+        writer.write(buildEvent(payload)).catch(() => {});
+      });
+    }
+
+    keepaliveInterval = setInterval(() => {
+      writer.write(encoder.encode(': keepalive\n\n')).catch(() => {});
+    }, 25_000);
+
+    c.req.raw.signal.addEventListener('abort', cleanup);
+
+    return new Response(body, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': allowedOrigin,
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      },
+    });
   });
 
   return sdk;

@@ -10,6 +10,7 @@ import {
   updateFlag,
   deleteFlag,
   toggleFlag,
+  queryEnvironmentFlagStates,
   queryOrgEnvironments,
   queryOrgEnvironmentIds,
   insertEnvironmentWithKey,
@@ -32,6 +33,10 @@ import {
   organizations,
 } from '@vexillo/db';
 import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
+
+// ── Interfaces ────────────────────────────────────────────────────────────────
+
+export type NotifyFlagChange = (environmentId: string, payload: string) => void | Promise<void>;
 
 // ── Domain errors ──────────────────────────────────────────────────────────────
 
@@ -140,7 +145,7 @@ export interface DashboardService {
 const TTL = 30_000;
 const MAX = 200;
 
-export function createDashboardService(db: DbClient): DashboardService {
+export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFlagChange): DashboardService {
   const flagsCache = new LRUCache<string, { flags: FlagWithStates[]; environments: EnvRef[] }>({ max: MAX, ttl: TTL });
   const envsCache = new LRUCache<string, EnvironmentWithKey[]>({ max: MAX, ttl: TTL });
   const membersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
@@ -209,6 +214,10 @@ export function createDashboardService(db: DbClient): DashboardService {
       const result = await toggleFlag(db, orgId, key, environmentId);
       if (!result) throw new NotFoundError('Flag not found');
       await insertAuditLog(db, { orgId, actorId, action: 'flag.toggle', targetType: 'flag', targetId: key, metadata: { key, environmentId, enabled: result.enabled } });
+      if (notifyFlagChange) {
+        const flagStates = await queryEnvironmentFlagStates(db, orgId, environmentId);
+        await notifyFlagChange(environmentId, JSON.stringify({ flags: flagStates }));
+      }
       flagsCache.delete(orgId);
       return result;
     },

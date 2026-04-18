@@ -1,6 +1,6 @@
 # Vexillo
 
-Self-hosted feature flag service. Manage flags per environment and organisation, with a React SDK for consumption.
+Self-hosted feature flag service. Manage flags per environment and organisation, with a React SDK for consumption — including real-time streaming so flag changes reach clients instantly.
 
 ## Packages
 
@@ -17,6 +17,7 @@ Self-hosted feature flag service. Manage flags per environment and organisation,
 - [pnpm](https://pnpm.io) ≥ 10
 - PostgreSQL ≥ 14
 - An [Okta](https://developer.okta.com) account (one app per organisation)
+- Redis _(optional)_ — required only for cross-container SSE fan-out in multi-instance deployments
 
 ## Getting started
 
@@ -33,6 +34,7 @@ Set required environment variables for `apps/api`:
 | `BETTER_AUTH_SECRET` | Random secret for session signing |
 | `OKTA_SECRET_KEY` | 64-char hex string for encrypting Okta client secrets at rest — generate with `openssl rand -hex 32` |
 | `SUPER_ADMIN_EMAILS` | Comma-separated list of emails auto-promoted to super-admin on first sign-in |
+| `REDIS_URL` | _(Optional)_ Redis connection string — enables SSE fan-out across multiple API containers |
 
 Push the schema to your database:
 

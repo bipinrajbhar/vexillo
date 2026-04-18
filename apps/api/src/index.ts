@@ -8,6 +8,8 @@ import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createAuth } from './lib/auth';
 import { createDashboardService } from './services/dashboard-service';
+import { createRedisClients } from './lib/redis';
+import { createStreamRegistry } from './lib/stream-registry';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -16,7 +18,25 @@ if (!DATABASE_URL) {
 
 const db = createDbClient(DATABASE_URL, { max: 10 });
 const auth = createAuth(db);
-const dashboardService = createDashboardService(db);
+
+// Optional Redis: enables cross-container SSE fan-out. Omit REDIS_URL to run
+// single-container (stream still works; toggles reach only local connections).
+const REDIS_URL = process.env.REDIS_URL;
+const redisClients = REDIS_URL ? createRedisClients(REDIS_URL) : undefined;
+
+// Always create the registry — it works in-memory without Redis. The Redis
+// subscriber is only needed for cross-container fan-out.
+const streamRegistry = createStreamRegistry(redisClients?.subscriber);
+
+// With Redis: publish to the channel so all containers' subscribers pick it up.
+// Without Redis: broadcast directly into the local registry.
+const notifyFlagChange = redisClients
+  ? (envId: string, payload: string) =>
+      redisClients.publisher.publish(`flags:env:${envId}`, payload)
+  : (envId: string, payload: string) =>
+      streamRegistry.broadcast(envId, payload);
+
+const dashboardService = createDashboardService(db, notifyFlagChange);
 
 const app = new Hono();
 
@@ -57,7 +77,7 @@ app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable
-const sdkRouter = createSdkRouter(db);
+const sdkRouter = createSdkRouter(db, streamRegistry);
 app.route('/api/sdk', sdkRouter);
 
 // OpenAPI spec + interactive docs (unauthenticated; internal use only)
@@ -85,4 +105,7 @@ const port = Number(process.env.PORT ?? 3000);
 export default {
   port,
   fetch: app.fetch,
+  // SSE connections are kept alive by a 25s keepalive comment; Bun's 10s default
+  // idle timeout would close them before the first keepalive fires.
+  idleTimeout: 120,
 };

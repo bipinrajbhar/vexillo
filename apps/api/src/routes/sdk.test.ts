@@ -310,15 +310,82 @@ describe('OPTIONS /api/sdk/flags', () => {
 });
 
 describe('GET /api/sdk/flags/stream', () => {
-  it('returns SSE content-type', async () => {
+  it('returns 401 when Authorization header is missing', async () => {
+    const app = makeApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/api/sdk/flags/stream'));
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when Bearer token is not found in DB', async () => {
     const app = makeApp(makeMockDb());
     const res = await app.fetch(
-      new Request('http://localhost/api/sdk/flags/stream'),
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: { Authorization: 'Bearer unknown-key' },
+      }),
     );
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when organization is suspended', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: [], orgStatus: 'suspended' }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 403 when Origin is not in allowedOrigins', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: ['https://allowed.com'] }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          Origin: 'https://notallowed.com',
+        },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns SSE stream with initial flag snapshot on valid auth', async () => {
+    const db = makeSdkQueueDb([
+      [{ environmentId: 'env-1' }],
+      [{ id: 'env-1', allowedOrigins: [] }],
+      [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }],
+    ]);
+    const app = makeApp(db);
+    const res = await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
+    expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
+    expect(res.headers.get('cache-control')).toBe('no-cache');
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
-    // Cancel the stream immediately to avoid dangling intervals in tests
-    await res.body?.cancel();
+
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    const dataLine = text.split('\n').find((l) => l.startsWith('data: '))!;
+    const payload = JSON.parse(dataLine.slice(6)) as {
+      flags: Array<{ key: string; enabled: boolean }>;
+    };
+    expect(payload.flags).toEqual([
+      { key: 'feat-a', enabled: true },
+      { key: 'feat-b', enabled: false },
+    ]);
+    await reader.cancel();
   });
 });
 

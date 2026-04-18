@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, mock } from 'bun:test';
 import { Hono } from 'hono';
 import { createDashboardRouter } from './dashboard';
 import type { GetSession, Session } from './dashboard';
 import type { DashboardService, OrgRow } from '../services/dashboard-service';
-import { NotFoundError, ConflictError, PreconditionError, ForbiddenError } from '../services/dashboard-service';
+import { NotFoundError, ConflictError, PreconditionError, ForbiddenError, createDashboardService } from '../services/dashboard-service';
+import type { DbClient } from '@vexillo/db';
 
 // ── Session fixtures ─────────────────────────────────────────────────────────
 
@@ -736,5 +737,66 @@ describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
       new Request(`${BASE}/members/u1`, { method: 'DELETE' }),
     );
     expect(res.status).toBe(204);
+  });
+});
+
+// ── DashboardService — toggleFlag Redis publish ───────────────────────────────
+//
+// Queue-based mock DB where onConflictDoUpdate is non-terminal (returns the chain
+// so that .returning() can chain after it), unlike the org-oauth mock which makes
+// it terminal. This matches the toggleFlag + queryEnvironmentFlagStates call shapes.
+
+function makeServiceDb(results: unknown[][]): DbClient {
+  const queue = [...results];
+  function consume(): unknown[] {
+    return (queue.shift() ?? []) as unknown[];
+  }
+  const chain: Record<string, unknown> = {};
+  chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+    Promise.resolve(consume()).then(resolve, reject);
+  for (const m of ['select', 'from', 'where', 'leftJoin', 'innerJoin', 'insert', 'values', 'onConflictDoUpdate', 'set', 'update', 'delete']) {
+    chain[m] = () => chain;
+  }
+  for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing']) {
+    chain[m] = () => Promise.resolve(consume());
+  }
+  return chain as unknown as DbClient;
+}
+
+describe('createDashboardService — toggleFlag Redis publish', () => {
+  it('publishes the full flag snapshot to flags:env:{environmentId} after a successful toggle', async () => {
+    const db = makeServiceDb([
+      [{ id: 'flag-1' }],                                               // flags lookup (thenable)
+      [{ enabled: true }],                                               // flagStates upsert (returning)
+      [],                                                                // audit log insert (returning)
+      [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }], // queryEnvironmentFlagStates (orderBy)
+    ]);
+
+    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
+
+    const service = createDashboardService(db, notifyMock);
+    const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
+
+    expect(result).toEqual({ enabled: true });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const [envId, payload] = notifyMock.mock.calls[0] as unknown as [string, string];
+    expect(envId).toBe('env-1');
+    const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean }> };
+    expect(parsed.flags).toEqual([
+      { key: 'feat-a', enabled: true },
+      { key: 'feat-b', enabled: false },
+    ]);
+  });
+
+  it('does not publish when no redisPublisher is provided', async () => {
+    const db = makeServiceDb([
+      [{ id: 'flag-1' }],   // flags lookup
+      [{ enabled: false }], // flagStates upsert
+      [],                   // audit log
+    ]);
+
+    const service = createDashboardService(db);
+    const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
+    expect(result).toEqual({ enabled: false });
   });
 });

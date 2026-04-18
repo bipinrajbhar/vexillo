@@ -14,6 +14,14 @@ export interface VexilloClientConfig {
 export interface VexilloClient {
   /** Fetches flags from the server and notifies subscribers. */
   load(): Promise<void>;
+  /**
+   * Opens a persistent SSE connection to /api/sdk/flags/stream.
+   * The first snapshot event sets isReady=true. Sends Last-Event-ID on
+   * reconnect; respects the server's retry: hint for the base reconnect
+   * delay, then backs off exponentially up to 30s. Returns a disconnect
+   * function.
+   */
+  connectStream(): () => void;
   /** Synchronous read. Priority: overrides > remote > fallbacks > false. */
   getFlag(key: string): boolean;
   /** Snapshot of all resolved flags (overrides + remote + fallbacks merged). */
@@ -138,8 +146,101 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     for (const key of affected) notifyKey(key);
   }
 
+  function connectStream(): () => void {
+    let active = true;
+    let abortController: AbortController | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    // Survive reconnects: server controls retryMs via the SSE retry: field.
+    let lastEventId: string | null = null;
+    let retryMs = 1000;
+    let backoffMs = retryMs;
+
+    async function attempt(): Promise<void> {
+      if (!active) return;
+
+      abortController = new AbortController();
+      try {
+        const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+        if (lastEventId !== null) headers['Last-Event-ID'] = lastEventId;
+
+        const res = await fetch(`${baseUrl}/api/sdk/flags/stream`, {
+          headers,
+          signal: abortController.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          throw new Error(`SSE: ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (active) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (line.startsWith('id: ')) {
+              lastEventId = line.slice(4).trim();
+            } else if (line.startsWith('retry: ')) {
+              const ms = parseInt(line.slice(7), 10);
+              if (!isNaN(ms)) {
+                retryMs = ms;
+                backoffMs = ms;
+              }
+            } else if (line.startsWith('data: ')) {
+              try {
+                const parsed = JSON.parse(line.slice(6)) as {
+                  flags: Array<{ key: string; enabled: boolean }>;
+                };
+                const next: Record<string, boolean> = {};
+                for (const f of parsed.flags) next[f.key] = f.enabled;
+                remoteFlags = next;
+                error = null;
+                ready = true;
+                backoffMs = retryMs;
+                notifyAll();
+              } catch {
+                // ignore malformed SSE events
+              }
+            }
+            // lines starting with ':' are comments (keepalive), skip
+          }
+        }
+      } catch (err) {
+        if (!active) return;
+        if (err instanceof Error && err.name === 'AbortError') return;
+        error = err instanceof Error ? err : new Error(String(err));
+        onError?.(error);
+      }
+
+      if (!active) return;
+      reconnectTimer = setTimeout(() => {
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+        void attempt();
+      }, backoffMs);
+    }
+
+    void attempt();
+
+    return () => {
+      active = false;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      abortController?.abort();
+    };
+  }
+
   return {
     load,
+    connectStream,
     getFlag,
     getAllFlags,
     subscribe,

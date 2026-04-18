@@ -27,10 +27,13 @@ export interface MockVexilloClientOptions {
 export function createMockVexilloClient(
   options: MockVexilloClientOptions = {},
 ): VexilloClient {
-  return createVexilloClient({
+  const client = createVexilloClient({
     baseUrl: "http://mock.invalid",
     apiKey: "mock",
     initialFlags: options.flags ?? {},
     fallbacks: options.fallbacks ?? {},
   });
+  // Override connectStream with a no-op so component tests don't need a real server.
+  client.connectStream = () => () => {};
+  return client;
 }

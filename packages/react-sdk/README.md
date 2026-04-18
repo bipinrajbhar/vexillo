@@ -9,6 +9,7 @@ React bindings for [Vexillo](https://vexillo-web.vercel.app) — a self-hosted f
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [SPA](#spa)
+- [Real-time streaming](#real-time-streaming)
 - [Next.js App Router (RSC)](#nextjs-app-router-rsc)
 - [Node.js SSR](#nodejs-ssr)
 - [Fallbacks](#fallbacks)
@@ -80,6 +81,61 @@ export function CheckoutButton() {
 ```
 
 `useFlag` returns `[value, isLoading]`. The component re-renders only when the value of that specific flag changes.
+
+---
+
+## Real-time streaming
+
+Pass `streaming` to `<VexilloClientProvider>` to open a persistent SSE connection. Components update automatically whenever a flag is toggled in the dashboard — no polling, no page reload.
+
+```tsx
+import { VexilloClientProvider } from "@vexillo/react-sdk";
+import { client } from "@/lib/vexillo";
+
+export default function App() {
+  return (
+    <VexilloClientProvider client={client} streaming>
+      <MyApp />
+    </VexilloClientProvider>
+  );
+}
+```
+
+**How it works**
+
+- On mount the provider calls `client.connectStream()`, which opens a `fetch`-based SSE connection to `/api/sdk/flags/stream`.
+- The server immediately sends the full flag snapshot, then pushes a new snapshot whenever a flag is toggled.
+- The connection sends a keepalive comment every 25 seconds so proxies and firewalls don't close idle connections.
+- If the connection drops, the client reconnects automatically with exponential backoff (base delay controlled by the server's `retry:` field, up to 30 s).
+- On every reconnect the client sends a `Last-Event-ID` header so the server can continue the event ID sequence.
+- On unmount the provider closes the connection cleanly.
+
+**Using the disconnect function directly**
+
+If you manage connection lifecycle outside React, call `connectStream()` yourself:
+
+```ts
+const disconnect = client.connectStream();
+
+// later — e.g. when the user signs out
+disconnect();
+```
+
+**Error handling during streaming**
+
+Stream errors (network drops, non-2xx responses) are surfaced the same way as `load()` errors:
+
+```ts
+const client = createVexilloClient({
+  baseUrl: "https://your-vexillo.example.com",
+  apiKey: "your-api-key",
+  onError: (err) => {
+    console.error("Stream error:", err);
+  },
+});
+```
+
+The client retries automatically after every error, so `onError` is informational — you do not need to reconnect manually.
 
 ---
 
@@ -257,6 +313,7 @@ afterEach(() => {
 |---|---|---|---|
 | `client` | `VexilloClient` | Yes | Client instance to provide to the tree |
 | `children` | `ReactNode` | Yes | |
+| `streaming` | `boolean` | No | When `true`, opens a persistent SSE connection via `connectStream()` instead of a one-time `load()`. Components update in real time when flags change. |
 
 ### `useFlag(key)`
 
@@ -287,7 +344,8 @@ Low-level fetch helper. Returns a flat `Record<string, boolean>`, or an empty ob
 |---|---|---|
 | `isReady` | `boolean` | `true` once `load()` has resolved or `initialFlags` was provided |
 | `lastError` | `Error \| null` | The error from the most recent failed `load()`, or `null` |
-| `load()` | `() => Promise<void>` | Fetches flags from the API. Called automatically by `<VexilloClientProvider>` on mount |
+| `load()` | `() => Promise<void>` | Fetches flags from the API. Called automatically by `<VexilloClientProvider>` on mount (unless `streaming` is set) |
+| `connectStream()` | `() => () => void` | Opens a persistent SSE connection. Returns a disconnect function. Called automatically by `<VexilloClientProvider streaming>` |
 | `getFlag(key)` | `(key: string) => boolean` | Synchronous flag read |
 | `getAllFlags()` | `() => Record<string, boolean>` | Snapshot of all resolved flags |
 | `override(flags)` | `(flags: Record<string, boolean>) => void` | Force flag values and notify subscribers |
