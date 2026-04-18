@@ -68,7 +68,7 @@ function makeDocsApp(db: Parameters<typeof createSdkRouter>[0]) {
   const sdkRouter = createSdkRouter(db);
   const app = new Hono();
   app.route('/api/sdk', sdkRouter);
-  app.get('/api/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
+  app.get('/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
   app.get('/api/docs', Scalar({ url: '/api/openapi.json' }));
   return app;
 }
@@ -328,8 +328,7 @@ describe('GET /api/sdk/flags/stream', () => {
 
   it('returns 403 when organization is suspended', async () => {
     const db = makeSdkQueueDb([
-      [{ environmentId: 'env-1' }],
-      [{ id: 'env-1', allowedOrigins: [], orgStatus: 'suspended' }],
+      [{ environmentId: 'env-1', orgId: 'org-1', allowedOrigins: [], orgStatus: 'suspended' }],
     ]);
     const app = makeApp(db);
     const res = await app.fetch(
@@ -342,8 +341,7 @@ describe('GET /api/sdk/flags/stream', () => {
 
   it('returns 403 when Origin is not in allowedOrigins', async () => {
     const db = makeSdkQueueDb([
-      [{ environmentId: 'env-1' }],
-      [{ id: 'env-1', allowedOrigins: ['https://allowed.com'] }],
+      [{ environmentId: 'env-1', orgId: 'org-1', allowedOrigins: ['https://allowed.com'], orgStatus: 'active' }],
     ]);
     const app = makeApp(db);
     const res = await app.fetch(
@@ -359,8 +357,7 @@ describe('GET /api/sdk/flags/stream', () => {
 
   it('returns SSE stream with initial flag snapshot on valid auth', async () => {
     const db = makeSdkQueueDb([
-      [{ environmentId: 'env-1' }],
-      [{ id: 'env-1', allowedOrigins: [] }],
+      [{ environmentId: 'env-1', orgId: 'org-1', allowedOrigins: [], orgStatus: 'active' }],
       [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }],
     ]);
     const app = makeApp(db);

@@ -5,6 +5,7 @@ import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
 import type { StreamRegistry } from '../lib/stream-registry';
 import type { AuthCache } from '../lib/auth-cache';
+import { createSnapshotCache } from '../lib/snapshot-cache';
 import type { SnapshotCache } from '../lib/snapshot-cache';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
@@ -83,6 +84,8 @@ export function createSdkRouter(
   authCache?: AuthCache,
   snapshotCache?: SnapshotCache,
 ) {
+  const cache = snapshotCache ?? createSnapshotCache();
+
   const sdk = new OpenAPIHono();
 
   // Register Bearer auth security scheme so it appears in the generated spec.
@@ -174,17 +177,22 @@ export function createSdkRouter(
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    const flagRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
+    let cachedSnapshot = cache.get(auth.environmentId);
+    if (!cachedSnapshot) {
+      const flagRows = await queryEnvironmentFlagStates(db, auth.orgId, auth.environmentId);
+      cachedSnapshot = JSON.stringify({ flags: flagRows.map((r) => ({ key: r.key, enabled: r.enabled })) });
+      cache.set(auth.environmentId, cachedSnapshot);
+    }
 
     const headers = {
       'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 's-maxage=30, stale-while-revalidate=60',
     };
 
     return c.json(
-      { flags: flagRows.map((r) => ({ key: r.key, enabled: r.enabled })) },
+      JSON.parse(cachedSnapshot) as { flags: Array<{ key: string; enabled: boolean }> },
       200,
       headers,
     );
@@ -236,7 +244,7 @@ export function createSdkRouter(
     }
 
     // Snapshot: cache is written on every flag toggle; DB only on cold miss.
-    let snapshot = snapshotCache?.get(auth.environmentId) ?? null;
+    let snapshot = cache.get(auth.environmentId);
     if (!snapshot) {
       const rows = await db
         .select({
@@ -256,7 +264,7 @@ export function createSdkRouter(
       snapshot = JSON.stringify({
         flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
       });
-      snapshotCache?.set(auth.environmentId, snapshot);
+      cache.set(auth.environmentId, snapshot);
     }
 
     const encoder = new TextEncoder();
