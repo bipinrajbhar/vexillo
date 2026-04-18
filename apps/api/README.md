@@ -18,6 +18,7 @@ Hono API server running on Bun. Handles authentication, the dashboard API, the p
 | `BETTER_AUTH_SECRET` | Random secret for signing sessions — generate with `openssl rand -base64 32` |
 | `OKTA_SECRET_KEY` | 64-char hex string for encrypting per-org Okta client secrets at rest — generate with `openssl rand -hex 32` |
 | `SUPER_ADMIN_EMAILS` | Comma-separated emails auto-promoted to super-admin on first sign-in |
+| `REDIS_URL` | _(Optional)_ Redis connection string, e.g. `redis://localhost:6379`. Enables cross-container SSE fan-out. Omit for single-container deployments — flag toggles still reach all local SSE connections. |
 
 > Per-org Okta credentials are stored encrypted in the database and configured via the super-admin dashboard, not via environment variables.
 
@@ -45,7 +46,8 @@ The API starts on `http://localhost:3000` with hot reload.
 | `GET /health` | None | Health check for load balancers |
 | `/api/auth/org-oauth/*` | None | Per-org Okta PKCE OAuth flow (authorize + callback) |
 | `/api/auth/*` | None | BetterAuth — session management |
-| `/api/sdk/*` | API key | Public SDK endpoint — flag states, CDN-cacheable |
+| `GET /api/sdk/flags` | API key | Current flag snapshot for an environment (JSON, CDN-cacheable) |
+| `GET /api/sdk/flags/stream` | API key | SSE stream — delivers the full flag snapshot immediately, then pushes a new snapshot on every toggle. Keepalive comment every 25 s. Includes `id:` and `retry:` fields per the SSE spec. |
 | `/api/dashboard/*` | Session (org member) | Org dashboard — flags, environments, members, API keys |
 | `/api/superadmin/*` | Super-admin | Org CRUD, Okta config, status management |
 

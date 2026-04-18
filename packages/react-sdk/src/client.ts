@@ -16,8 +16,10 @@ export interface VexilloClient {
   load(): Promise<void>;
   /**
    * Opens a persistent SSE connection to /api/sdk/flags/stream.
-   * The first snapshot event sets isReady=true. Reconnects with exponential
-   * backoff (1s → 2s → 4s … max 30s). Returns a disconnect function.
+   * The first snapshot event sets isReady=true. Sends Last-Event-ID on
+   * reconnect; respects the server's retry: hint for the base reconnect
+   * delay, then backs off exponentially up to 30s. Returns a disconnect
+   * function.
    */
   connectStream(): () => void;
   /** Synchronous read. Priority: overrides > remote > fallbacks > false. */
@@ -148,15 +150,21 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     let active = true;
     let abortController: AbortController | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let backoffMs = 1000;
+    // Survive reconnects: server controls retryMs via the SSE retry: field.
+    let lastEventId: string | null = null;
+    let retryMs = 1000;
+    let backoffMs = retryMs;
 
     async function attempt(): Promise<void> {
       if (!active) return;
 
       abortController = new AbortController();
       try {
+        const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+        if (lastEventId !== null) headers['Last-Event-ID'] = lastEventId;
+
         const res = await fetch(`${baseUrl}/api/sdk/flags/stream`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers,
           signal: abortController.signal,
         });
 
@@ -167,7 +175,6 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
-        let gotEvent = false;
 
         while (active) {
           const { done, value } = await reader.read();
@@ -178,24 +185,31 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
           buf = lines.pop() ?? '';
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const parsed = JSON.parse(line.slice(6)) as {
-                flags: Array<{ key: string; enabled: boolean }>;
-              };
-              const next: Record<string, boolean> = {};
-              for (const f of parsed.flags) next[f.key] = f.enabled;
-              remoteFlags = next;
-              error = null;
-              ready = true;
-              if (!gotEvent) {
-                gotEvent = true;
-                backoffMs = 1000;
+            if (line.startsWith('id: ')) {
+              lastEventId = line.slice(4).trim();
+            } else if (line.startsWith('retry: ')) {
+              const ms = parseInt(line.slice(7), 10);
+              if (!isNaN(ms)) {
+                retryMs = ms;
+                backoffMs = ms;
               }
-              notifyAll();
-            } catch {
-              // ignore malformed SSE events
+            } else if (line.startsWith('data: ')) {
+              try {
+                const parsed = JSON.parse(line.slice(6)) as {
+                  flags: Array<{ key: string; enabled: boolean }>;
+                };
+                const next: Record<string, boolean> = {};
+                for (const f of parsed.flags) next[f.key] = f.enabled;
+                remoteFlags = next;
+                error = null;
+                ready = true;
+                backoffMs = retryMs;
+                notifyAll();
+              } catch {
+                // ignore malformed SSE events
+              }
             }
+            // lines starting with ':' are comments (keepalive), skip
           }
         }
       } catch (err) {

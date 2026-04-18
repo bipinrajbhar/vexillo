@@ -772,16 +772,15 @@ describe('createDashboardService — toggleFlag Redis publish', () => {
       [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }], // queryEnvironmentFlagStates (orderBy)
     ]);
 
-    const publishMock = mock(() => Promise.resolve(1));
-    const publisher = { publish: publishMock };
+    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
 
-    const service = createDashboardService(db, publisher);
+    const service = createDashboardService(db, notifyMock);
     const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
 
     expect(result).toEqual({ enabled: true });
-    expect(publishMock).toHaveBeenCalledTimes(1);
-    const [channel, payload] = publishMock.mock.calls[0] as unknown as [string, string];
-    expect(channel).toBe('flags:env:env-1');
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const [envId, payload] = notifyMock.mock.calls[0] as unknown as [string, string];
+    expect(envId).toBe('env-1');
     const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean }> };
     expect(parsed.flags).toEqual([
       { key: 'feat-a', enabled: true },

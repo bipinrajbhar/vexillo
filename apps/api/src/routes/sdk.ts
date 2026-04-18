@@ -269,38 +269,65 @@ export function createSdkRouter(db: DbClient, streamRegistry?: StreamRegistry) {
     });
 
     const encoder = new TextEncoder();
-    let keepaliveInterval: ReturnType<typeof setInterval>;
 
-    const body = new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(`data: ${snapshot}\n\n`));
+    // Use TransformStream + pull-based wrapper — the same pattern Hono's
+    // streamSSE uses internally. A push-only ReadableStream (start() + no pull())
+    // causes Bun to consider the response done after the first chunk is consumed,
+    // so subsequent enqueues (keepalive, Redis snapshots) close the connection.
+    const { readable, writable } = new TransformStream<Uint8Array>();
+    const writer = writable.getWriter();
+    const tsReader = readable.getReader();
 
-        // Register with the stream registry to receive Redis-pushed snapshots.
-        let unregisterStream: (() => void) | undefined;
-        if (streamRegistry) {
-          unregisterStream = streamRegistry.register(env.id, (payload) => {
-            controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
-          });
-        }
+    let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
+    let unregisterStream: (() => void) | undefined;
+    let closed = false;
+    let eventId = 1;
 
-        keepaliveInterval = setInterval(() => {
-          controller.enqueue(encoder.encode(': keepalive\n\n'));
-        }, 25_000);
+    // Continue the ID sequence if the client is reconnecting.
+    const lastEventIdHeader = c.req.header('last-event-id');
+    if (lastEventIdHeader) {
+      const parsed = parseInt(lastEventIdHeader, 10);
+      if (!isNaN(parsed)) eventId = parsed + 1;
+    }
 
-        c.req.raw.signal.addEventListener('abort', () => {
-          clearInterval(keepaliveInterval);
-          unregisterStream?.();
-          try {
-            controller.close();
-          } catch {
-            // already closed
-          }
-        });
+    function buildEvent(data: string, retryMs?: number): Uint8Array {
+      let msg = retryMs !== undefined ? `retry: ${retryMs}\n` : '';
+      msg += `id: ${eventId++}\n`;
+      msg += `data: ${data}\n\n`;
+      return encoder.encode(msg);
+    }
+
+    function cleanup() {
+      if (closed) return;
+      closed = true;
+      clearInterval(keepaliveInterval);
+      unregisterStream?.();
+      writer.close().catch(() => {});
+    }
+
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await tsReader.read();
+        done ? controller.close() : controller.enqueue(value);
       },
-      cancel() {
-        clearInterval(keepaliveInterval);
-      },
+      cancel: cleanup,
     });
+
+    // Send initial snapshot with retry hint so clients know the preferred
+    // reconnect delay without waiting for a failed attempt.
+    await writer.write(buildEvent(snapshot, 1000));
+
+    if (streamRegistry) {
+      unregisterStream = streamRegistry.register(env.id, (payload) => {
+        writer.write(buildEvent(payload)).catch(() => {});
+      });
+    }
+
+    keepaliveInterval = setInterval(() => {
+      writer.write(encoder.encode(': keepalive\n\n')).catch(() => {});
+    }, 25_000);
+
+    c.req.raw.signal.addEventListener('abort', cleanup);
 
     return new Response(body, {
       headers: {

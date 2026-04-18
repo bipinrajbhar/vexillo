@@ -24,7 +24,7 @@ export interface StreamRegistry {
   broadcast(environmentId: string, payload: string): void;
 }
 
-export function createStreamRegistry(subscriber: RedisSubscriber): StreamRegistry {
+export function createStreamRegistry(subscriber?: RedisSubscriber): StreamRegistry {
   const envSends = new Map<string, Set<SendFn>>();
 
   function broadcast(envId: string, payload: string): void {
@@ -38,7 +38,7 @@ export function createStreamRegistry(subscriber: RedisSubscriber): StreamRegistr
     if (!set) {
       set = new Set();
       envSends.set(envId, set);
-      subscriber.subscribe(`flags:env:${envId}`, (message) => broadcast(envId, message));
+      subscriber?.subscribe(`flags:env:${envId}`, (message) => broadcast(envId, message));
     }
     set.add(send);
 
@@ -46,7 +46,7 @@ export function createStreamRegistry(subscriber: RedisSubscriber): StreamRegistr
       set!.delete(send);
       if (set!.size === 0) {
         envSends.delete(envId);
-        subscriber.unsubscribe(`flags:env:${envId}`);
+        subscriber?.unsubscribe(`flags:env:${envId}`);
       }
     };
   }

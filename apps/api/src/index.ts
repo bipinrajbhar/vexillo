@@ -23,11 +23,20 @@ const auth = createAuth(db);
 // single-container (stream still works; toggles reach only local connections).
 const REDIS_URL = process.env.REDIS_URL;
 const redisClients = REDIS_URL ? createRedisClients(REDIS_URL) : undefined;
-const streamRegistry = redisClients
-  ? createStreamRegistry(redisClients.subscriber)
-  : undefined;
 
-const dashboardService = createDashboardService(db, redisClients?.publisher);
+// Always create the registry — it works in-memory without Redis. The Redis
+// subscriber is only needed for cross-container fan-out.
+const streamRegistry = createStreamRegistry(redisClients?.subscriber);
+
+// With Redis: publish to the channel so all containers' subscribers pick it up.
+// Without Redis: broadcast directly into the local registry.
+const notifyFlagChange = redisClients
+  ? (envId: string, payload: string) =>
+      redisClients.publisher.publish(`flags:env:${envId}`, payload)
+  : (envId: string, payload: string) =>
+      streamRegistry.broadcast(envId, payload);
+
+const dashboardService = createDashboardService(db, notifyFlagChange);
 
 const app = new Hono();
 
@@ -92,4 +101,7 @@ const port = Number(process.env.PORT ?? 3000);
 export default {
   port,
   fetch: app.fetch,
+  // SSE connections are kept alive by a 25s keepalive comment; Bun's 10s default
+  // idle timeout would close them before the first keepalive fires.
+  idleTimeout: 120,
 };
