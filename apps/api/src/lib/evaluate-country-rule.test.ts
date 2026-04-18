@@ -18,8 +18,9 @@ describe('evaluateCountryRule', () => {
   });
 
   describe('geo rules configured (allowedCountries non-empty)', () => {
-    it('returns true when countryCode is in the allowlist', () => {
-      expect(evaluateCountryRule({ allowedCountries: ['US', 'CA', 'GB'], countryCode: 'CA', envEnabled: false })).toBe(true);
+    it('returns envEnabled when countryCode is in the allowlist', () => {
+      expect(evaluateCountryRule({ allowedCountries: ['US', 'CA', 'GB'], countryCode: 'CA', envEnabled: true })).toBe(true);
+      expect(evaluateCountryRule({ allowedCountries: ['US', 'CA', 'GB'], countryCode: 'CA', envEnabled: false })).toBe(false);
     });
 
     it('returns false when countryCode is not in the allowlist', () => {
@@ -32,8 +33,8 @@ describe('evaluateCountryRule', () => {
     });
 
     it('compares country codes case-insensitively', () => {
-      expect(evaluateCountryRule({ allowedCountries: ['us', 'CA'], countryCode: 'US', envEnabled: false })).toBe(true);
-      expect(evaluateCountryRule({ allowedCountries: ['US'], countryCode: 'us', envEnabled: false })).toBe(true);
+      expect(evaluateCountryRule({ allowedCountries: ['us', 'CA'], countryCode: 'US', envEnabled: true })).toBe(true);
+      expect(evaluateCountryRule({ allowedCountries: ['US'], countryCode: 'us', envEnabled: true })).toBe(true);
     });
 
     it('returns false for non-whitelisted country regardless of env toggle', () => {
