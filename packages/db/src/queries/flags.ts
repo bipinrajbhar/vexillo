@@ -189,3 +189,37 @@ export async function toggleFlag(
 
   return { enabled: state.enabled };
 }
+
+export async function setFlagCountryRules(
+  db: DbClient,
+  orgId: string,
+  key: string,
+  environmentId: string,
+  allowedCountries: string[],
+): Promise<{ before: string[]; after: string[] } | null> {
+  const [flag] = await db
+    .select({ id: flags.id })
+    .from(flags)
+    .where(and(eq(flags.key, key), eq(flags.orgId, orgId)));
+
+  if (!flag) return null;
+
+  const [current] = await db
+    .select({ allowedCountries: flagStates.allowedCountries })
+    .from(flagStates)
+    .where(and(eq(flagStates.flagId, flag.id), eq(flagStates.environmentId, environmentId)))
+    .limit(1);
+
+  const before = current?.allowedCountries ?? [];
+
+  const [updated] = await db
+    .insert(flagStates)
+    .values({ flagId: flag.id, environmentId, enabled: false, allowedCountries })
+    .onConflictDoUpdate({
+      target: [flagStates.flagId, flagStates.environmentId],
+      set: { allowedCountries },
+    })
+    .returning({ allowedCountries: flagStates.allowedCountries });
+
+  return { before, after: updated.allowedCountries };
+}

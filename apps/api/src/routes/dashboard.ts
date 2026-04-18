@@ -148,6 +148,30 @@ export function createDashboardRouter(service: DashboardService, getSession: Get
     }
   });
 
+  router.put('/:orgSlug/flags/:key/environments/:envId/country-rules', async (c) => {
+    const org = c.get('org');
+    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+
+    const body = await c.req.json() as unknown;
+    const countries = (body as Record<string, unknown>)?.countries;
+    if (!Array.isArray(countries) || !countries.every((x) => typeof x === 'string')) {
+      return c.json({ error: 'countries must be an array of strings' }, 400);
+    }
+
+    try {
+      const result = await service.updateCountryRules(
+        org.id,
+        c.get('session')!.user.id,
+        c.req.param('key'),
+        c.req.param('envId'),
+        countries as string[],
+      );
+      return c.json(result);
+    } catch (err) {
+      return handleServiceError(err, c) ?? (() => { throw err; })();
+    }
+  });
+
   // ── Environments ──────────────────────────────────────────────────────────────
 
   router.get('/:orgSlug/environments', async (c) => {

@@ -50,6 +50,7 @@ function makeMockService(overrides: Partial<DashboardService> = {}): DashboardSe
     updateFlag: notImplemented('updateFlag') as DashboardService['updateFlag'],
     deleteFlag: notImplemented('deleteFlag') as DashboardService['deleteFlag'],
     toggleFlag: notImplemented('toggleFlag') as DashboardService['toggleFlag'],
+    updateCountryRules: notImplemented('updateCountryRules') as DashboardService['updateCountryRules'],
     getEnvironments: notImplemented('getEnvironments') as DashboardService['getEnvironments'],
     createEnvironment: notImplemented('createEnvironment') as DashboardService['createEnvironment'],
     updateEnvironmentOrigins: notImplemented('updateEnvironmentOrigins') as DashboardService['updateEnvironmentOrigins'],
@@ -386,6 +387,95 @@ describe('POST /api/dashboard/:orgSlug/flags/:key/toggle', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { enabled: boolean };
     expect(body.enabled).toBe(true);
+  });
+});
+
+// ── PUT /api/dashboard/:orgSlug/flags/:key/environments/:envId/country-rules ─
+
+describe('PUT /api/dashboard/:orgSlug/flags/:key/environments/:envId/country-rules', () => {
+  it('returns 403 for viewer', async () => {
+    const app = makeApp(viewerService(), viewerSession);
+    const res = await app.fetch(
+      new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countries: ['US'] }),
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 when countries is not an array', async () => {
+    const app = makeApp(adminService(), adminSession);
+    const res = await app.fetch(
+      new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countries: 'US' }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when countries contains non-strings', async () => {
+    const app = makeApp(adminService(), adminSession);
+    const res = await app.fetch(
+      new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countries: ['US', 42] }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when flag not found', async () => {
+    const app = makeApp(
+      adminService({ updateCountryRules: async () => { throw new NotFoundError('Flag not found'); } }),
+      adminSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/flags/gone/environments/env-1/country-rules`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countries: ['US'] }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 200 with updated country list', async () => {
+    const app = makeApp(
+      adminService({ updateCountryRules: async () => ({ countries: ['CA', 'US'] }) }),
+      adminSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countries: ['CA', 'US'] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { countries: string[] };
+    expect(body.countries).toEqual(['CA', 'US']);
+  });
+
+  it('accepts an empty array to clear all rules', async () => {
+    const app = makeApp(
+      adminService({ updateCountryRules: async () => ({ countries: [] }) }),
+      adminSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countries: [] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { countries: string[] };
+    expect(body.countries).toEqual([]);
   });
 });
 
@@ -798,5 +888,48 @@ describe('createDashboardService — toggleFlag Redis publish', () => {
     const service = createDashboardService(db);
     const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
     expect(result).toEqual({ enabled: false });
+  });
+});
+
+describe('createDashboardService — updateCountryRules', () => {
+  it('persists rules, writes audit log with before/after, and notifies', async () => {
+    const db = makeServiceDb([
+      [{ id: 'flag-1' }],                                      // flags lookup (thenable)
+      [{ allowedCountries: ['FR'] }],                           // current flagStates (limit)
+      [{ allowedCountries: ['US', 'CA'] }],                     // upsert returning
+      [],                                                       // audit log (returning)
+      [{ key: 'feat-a', enabled: true, allowedCountries: ['US', 'CA'] }], // queryEnvironmentFlagStates (orderBy)
+    ]);
+
+    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
+    const service = createDashboardService(db, notifyMock);
+    const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', ['us', 'ca']);
+
+    expect(result).toEqual({ countries: ['US', 'CA'] });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const [envId] = notifyMock.mock.calls[0] as unknown as [string, string];
+    expect(envId).toBe('env-1');
+  });
+
+  it('clears rules when countries is empty', async () => {
+    const db = makeServiceDb([
+      [{ id: 'flag-1' }],             // flags lookup (thenable)
+      [{ allowedCountries: ['US'] }], // current state (limit)
+      [{ allowedCountries: [] }],     // upsert returning
+      [],                             // audit log
+    ]);
+
+    const service = createDashboardService(db);
+    const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', []);
+    expect(result).toEqual({ countries: [] });
+  });
+
+  it('returns NotFoundError when flag does not exist', async () => {
+    const db = makeServiceDb([
+      [], // flags lookup returns empty
+    ]);
+
+    const service = createDashboardService(db);
+    await expect(service.updateCountryRules('org-1', 'actor-1', 'missing', 'env-1', ['US'])).rejects.toThrow('Flag not found');
   });
 });

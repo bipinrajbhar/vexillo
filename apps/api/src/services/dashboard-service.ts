@@ -10,6 +10,7 @@ import {
   updateFlag,
   deleteFlag,
   toggleFlag,
+  setFlagCountryRules,
   queryEnvironmentFlagStates,
   queryOrgEnvironments,
   queryOrgEnvironmentIds,
@@ -114,6 +115,13 @@ export interface DashboardService {
   ): Promise<typeof import('@vexillo/db').flags.$inferSelect>;
   deleteFlag(orgId: string, actorId: string, key: string): Promise<void>;
   toggleFlag(orgId: string, actorId: string, key: string, environmentId: string): Promise<{ enabled: boolean }>;
+  updateCountryRules(
+    orgId: string,
+    actorId: string,
+    key: string,
+    environmentId: string,
+    countries: string[],
+  ): Promise<{ countries: string[] }>;
 
   // Environments
   getEnvironments(orgId: string): Promise<EnvironmentWithKey[]>;
@@ -220,6 +228,19 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       }
       flagsCache.delete(orgId);
       return result;
+    },
+
+    async updateCountryRules(orgId, actorId, key, environmentId, countries) {
+      const normalized = countries.map((c) => c.toUpperCase());
+      const result = await setFlagCountryRules(db, orgId, key, environmentId, normalized);
+      if (!result) throw new NotFoundError('Flag not found');
+      await insertAuditLog(db, { orgId, actorId, action: 'flag.country-rules.update', targetType: 'flag', targetId: key, metadata: { key, environmentId, before: result.before, after: result.after } });
+      if (notifyFlagChange) {
+        const updatedFlags = await queryEnvironmentFlagStates(db, orgId, environmentId);
+        await notifyFlagChange(environmentId, JSON.stringify({ flags: updatedFlags }));
+      }
+      flagsCache.delete(orgId);
+      return { countries: result.after };
     },
 
     // ── Environments ─────────────────────────────────────────────────────────
