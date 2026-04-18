@@ -234,6 +234,12 @@ export function createSdkRouter(db: DbClient) {
 // OpenAPI document config — shared between index.ts and tests.
 // Note: `components` (incl. securitySchemes) cannot go here; they are
 // registered via openAPIRegistry inside createSdkRouter.
+//
+// APP_URL controls the server origin shown in Scalar's "Try it out" panel.
+// Set it to the CloudFront domain in production so requests hit AWS directly.
+// Falls back to a relative path so local dev works without configuration.
+const appUrl = process.env.APP_URL?.replace(/\/$/, '') ?? '';
+
 export const SDK_OPENAPI_CONFIG = {
   openapi: '3.0.0' as const,
   info: {
@@ -242,5 +248,5 @@ export const SDK_OPENAPI_CONFIG = {
     description:
       'Feature flag SDK API. Authenticate via `Authorization: Bearer <api-key>`.',
   },
-  servers: [{ url: '/api/sdk' }],
+  servers: [{ url: `${appUrl}/api/sdk` }],
 };

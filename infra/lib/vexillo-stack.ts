@@ -164,7 +164,7 @@ export class VexilloStack extends cdk.Stack {
         executionRole,
         taskRole,
         logDriver: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: 'api' }),
-        environment: { PORT: '8080', NODE_ENV: 'production' },
+        environment: { PORT: '8080', NODE_ENV: 'production', APP_URL: 'https://d17jl9yejd73ew.cloudfront.net' },
         // ECS reads these from SSM and injects as env vars before the container starts.
         secrets: {
           DATABASE_URL:                ecs.Secret.fromSsmParameter(ssmParams['/vexillo/DATABASE_URL']),
