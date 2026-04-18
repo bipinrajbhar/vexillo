@@ -225,6 +225,7 @@ export function createDashboardRouter(service: DashboardService, getSession: Get
 
   router.get('/:orgSlug/members', async (c) => {
     const org = c.get('org');
+    if (c.get('userRole') !== 'admin') return c.json({ error: 'Forbidden' }, 403);
     const members = await service.getMembers(org.id);
     return c.json({ members });
   });

@@ -589,7 +589,7 @@ describe('GET /api/dashboard/:orgSlug/members', () => {
   });
 
   it('returns members list for admin', async () => {
-    const members = [{ id: 'u1', name: 'Alice', email: 'alice@example.com', role: 'admin', createdAt: new Date() }];
+    const members = [{ id: 'u1', name: 'Alice', email: 'alice@example.com', role: 'admin', createdAt: new Date(), isSuperAdmin: false }];
     const app = makeApp(
       adminService({ getMembers: async () => members }),
       adminSession,

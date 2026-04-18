@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
+import { Scalar } from '@scalar/hono-api-reference';
 import { createDbClient } from '@vexillo/db';
-import { createSdkRouter } from './routes/sdk';
+import { createSdkRouter, SDK_OPENAPI_CONFIG } from './routes/sdk';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
@@ -56,7 +57,12 @@ app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable
-app.route('/api/sdk', createSdkRouter(db));
+const sdkRouter = createSdkRouter(db);
+app.route('/api/sdk', sdkRouter);
+
+// OpenAPI spec + interactive docs (unauthenticated; internal use only)
+app.get('/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
+app.get('/docs', Scalar({ url: '/openapi.json' }));
 
 // Dashboard routes — session auth required
 app.route(

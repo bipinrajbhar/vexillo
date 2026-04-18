@@ -1,7 +1,8 @@
 import { describe, it, expect, mock } from 'bun:test';
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
-import { createSdkRouter } from './sdk';
+import { Scalar } from '@scalar/hono-api-reference';
+import { createSdkRouter, SDK_OPENAPI_CONFIG } from './sdk';
 
 // Minimal mock DB that satisfies the shape used by createSdkRouter.
 // All queries return empty arrays — used for error-path tests.
@@ -49,6 +50,15 @@ function makeApp(db: Parameters<typeof createSdkRouter>[0]) {
   const app = new Hono();
   app.get('/health', (c) => c.json({ status: 'ok' }));
   app.route('/api/sdk', createSdkRouter(db));
+  return app;
+}
+
+function makeDocsApp(db: Parameters<typeof createSdkRouter>[0]) {
+  const sdkRouter = createSdkRouter(db);
+  const app = new Hono();
+  app.route('/api/sdk', sdkRouter);
+  app.get('/openapi.json', (c) => c.json(sdkRouter.getOpenAPIDocument(SDK_OPENAPI_CONFIG)));
+  app.get('/docs', Scalar({ url: '/openapi.json' }));
   return app;
 }
 
@@ -315,5 +325,106 @@ describe('Security headers', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
     // Security headers still present
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+});
+
+describe('GET /openapi.json', () => {
+  it('returns 200 with application/json content-type', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+  });
+
+  it('includes /flags path with GET method', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    expect(paths).toHaveProperty('/flags');
+    expect((paths['/flags'] as Record<string, unknown>)).toHaveProperty('get');
+  });
+
+  it('includes /flags/stream path with GET method', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    expect(paths).toHaveProperty('/flags/stream');
+    expect((paths['/flags/stream'] as Record<string, unknown>)).toHaveProperty('get');
+  });
+
+  it('includes BearerAuth security scheme in components', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const securitySchemes = (
+      (spec.components as Record<string, unknown>)?.securitySchemes as Record<string, unknown>
+    );
+    expect(securitySchemes).toHaveProperty('BearerAuth');
+    expect((securitySchemes.BearerAuth as Record<string, unknown>).type).toBe('http');
+    expect((securitySchemes.BearerAuth as Record<string, unknown>).scheme).toBe('bearer');
+  });
+
+  it('/flags GET operation requires BearerAuth security', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    const flagsGet = (paths['/flags'] as Record<string, unknown>).get as Record<string, unknown>;
+    const security = flagsGet.security as Array<Record<string, unknown>>;
+    expect(security.some((s) => 'BearerAuth' in s)).toBe(true);
+  });
+
+  it('/flags/stream GET operation requires BearerAuth security', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    const streamGet = (paths['/flags/stream'] as Record<string, unknown>).get as Record<string, unknown>;
+    const security = streamGet.security as Array<Record<string, unknown>>;
+    expect(security.some((s) => 'BearerAuth' in s)).toBe(true);
+  });
+
+  it('/flags GET operation has 200, 401, and 403 response codes', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    const responses = (
+      (paths['/flags'] as Record<string, unknown>).get as Record<string, unknown>
+    ).responses as Record<string, unknown>;
+    expect(responses).toHaveProperty('200');
+    expect(responses).toHaveProperty('401');
+    expect(responses).toHaveProperty('403');
+  });
+
+  it('/flags GET has operationId getFlags', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    const flagsGet = (paths['/flags'] as Record<string, unknown>).get as Record<string, unknown>;
+    expect(flagsGet.operationId).toBe('getFlags');
+  });
+
+  it('/flags/stream GET has operationId getFlagsStream', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/openapi.json'));
+    const spec = await res.json() as Record<string, unknown>;
+    const paths = spec.paths as Record<string, unknown>;
+    const streamGet = (
+      paths['/flags/stream'] as Record<string, unknown>
+    ).get as Record<string, unknown>;
+    expect(streamGet.operationId).toBe('getFlagsStream');
+  });
+});
+
+describe('GET /docs', () => {
+  it('returns 200 with text/html content-type', async () => {
+    const app = makeDocsApp(makeMockDb());
+    const res = await app.fetch(new Request('http://localhost/docs'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
   });
 });

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, and, asc, sql } from 'drizzle-orm';
 import { apiKeys, environments, organizations, flags, flagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
@@ -32,8 +32,80 @@ function resolveAllowedOrigin(
   return null;
 }
 
+// ── OpenAPI schemas ───────────────────────────────────────────────────────────
+
+const ErrorSchema = z.object({ error: z.string() }).openapi('Error');
+
+const FlagSchema = z
+  .object({ key: z.string(), enabled: z.boolean() })
+  .openapi('Flag');
+
+const FlagsResponseSchema = z
+  .object({ flags: z.array(FlagSchema) })
+  .openapi('FlagsResponse');
+
+// ── Route definitions ─────────────────────────────────────────────────────────
+
+const getFlagsRoute = createRoute({
+  method: 'get',
+  path: '/flags',
+  operationId: 'getFlags',
+  summary: 'Get feature flags for an environment',
+  description:
+    'Returns all flag states for the environment associated with the provided API key. ' +
+    'Authentication is via `Authorization: Bearer <api-key>`.',
+  security: [{ BearerAuth: [] }],
+  responses: {
+    200: {
+      content: { 'application/json': { schema: FlagsResponseSchema } },
+      description: 'Flag states for the environment',
+    },
+    401: {
+      content: { 'application/json': { schema: ErrorSchema } },
+      description: 'Missing or invalid Bearer token',
+    },
+    403: {
+      content: { 'application/json': { schema: ErrorSchema } },
+      description:
+        'API key valid but environment not found, org suspended, or Origin not in the allowlist',
+    },
+  },
+});
+
+const getFlagsStreamRoute = createRoute({
+  method: 'get',
+  path: '/flags/stream',
+  operationId: 'getFlagsStream',
+  summary: 'Feature flag SSE stream (keepalive stub)',
+  security: [{ BearerAuth: [] }],
+  description:
+    'Server-sent events stream. Currently a stub that emits a keepalive comment ' +
+    '(`: keepalive`) every 25 seconds to prevent CloudFront from closing the idle ' +
+    'connection (CloudFront read timeout is 60 s). Does not yet emit flag data.',
+  responses: {
+    200: {
+      content: {
+        'text/event-stream': {
+          schema: z.string().openapi({ example: ': keepalive' }),
+        },
+      },
+      description:
+        'SSE stream. Content-Type: text/event-stream; Cache-Control: no-cache; ' +
+        'Connection: keep-alive; Access-Control-Allow-Origin: *',
+    },
+  },
+});
+
+// ── Router factory ────────────────────────────────────────────────────────────
+
 export function createSdkRouter(db: DbClient) {
-  const sdk = new Hono();
+  const sdk = new OpenAPIHono();
+
+  // Register Bearer auth security scheme so it appears in the generated spec.
+  sdk.openAPIRegistry.registerComponent('securitySchemes', 'BearerAuth', {
+    type: 'http',
+    scheme: 'bearer',
+  });
 
   // Preflight — we can't check allowedOrigins without an API key, so we return
   // * here. The actual GET will enforce origin restrictions before returning data.
@@ -41,8 +113,7 @@ export function createSdkRouter(db: DbClient) {
     return c.body(null, 204, SDK_ERROR_CORS_HEADERS);
   });
 
-  // GET /api/sdk/flags — bearer API key auth, returns flag states for the environment
-  sdk.get('/flags', async (c) => {
+  sdk.openapi(getFlagsRoute, async (c) => {
     const authHeader = c.req.header('authorization');
     const token =
       authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -120,9 +191,7 @@ export function createSdkRouter(db: DbClient) {
     );
   });
 
-  // GET /api/sdk/flags/stream — SSE stub, emits keepalive comment every 25s
-  // CloudFront has a 60s read timeout; keepalive every 25s prevents silent disconnect.
-  sdk.get('/flags/stream', (c) => {
+  sdk.openapi(getFlagsStreamRoute, (c) => {
     const encoder = new TextEncoder();
     let interval: ReturnType<typeof setInterval>;
 
@@ -159,3 +228,17 @@ export function createSdkRouter(db: DbClient) {
 
   return sdk;
 }
+
+// OpenAPI document config — shared between index.ts and tests.
+// Note: `components` (incl. securitySchemes) cannot go here; they are
+// registered via openAPIRegistry inside createSdkRouter.
+export const SDK_OPENAPI_CONFIG = {
+  openapi: '3.0.0' as const,
+  info: {
+    title: 'Togglr SDK API',
+    version: '1.0.0',
+    description:
+      'Feature flag SDK API. Authenticate via `Authorization: Bearer <api-key>`.',
+  },
+  servers: [{ url: '/api/sdk' }],
+};

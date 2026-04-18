@@ -29,7 +29,7 @@ function makeMockDb(staticResults: unknown[][] = []) {
     chain[m] = () => chain;
   }
 
-  for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing']) {
+  for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing', 'onConflictDoUpdate']) {
     chain[m] = () => Promise.resolve(consume());
   }
 
@@ -301,7 +301,8 @@ describe('GET /api/auth/org-oauth/callback', () => {
         createSession: async () => ({ token: sessionToken }),
       });
 
-      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), auth);
+      // Queue: org lookup, adminCount query (new org → 0 admins → new user gets admin)
+      const app = makeApp(makeMockDb([[ACTIVE_ORG], [{ adminCount: 0 }]]), auth);
       const res = await app.fetch(
         new Request(`${BASE}/callback?code=authcode&state=${nonce}`, {
           headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
@@ -444,7 +445,8 @@ describe('SUPER_ADMIN_EMAILS auto-promotion and redirect', () => {
       process.env.BETTER_AUTH_URL = 'http://localhost:3000';
       process.env.SUPER_ADMIN_EMAILS = 'notmatch@example.com';
 
-      const db = makeMockDb([[ACTIVE_ORG]]);
+      // Queue: org lookup, adminCount query (org has admins → new user gets viewer)
+      const db = makeMockDb([[ACTIVE_ORG], [{ adminCount: 1 }]]);
       let updateCalled = false;
       const originalUpdate = (db as unknown as Record<string, unknown>).update;
       (db as unknown as Record<string, unknown>).update = (...args: unknown[]) => {
@@ -497,7 +499,8 @@ describe('SUPER_ADMIN_EMAILS auto-promotion and redirect', () => {
         createSession: async () => ({ token: 'sess-tok' }),
       });
 
-      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), auth);
+      // Queue: org lookup, adminCount query (org has admins → existing user gets viewer if new member)
+      const app = makeApp(makeMockDb([[ACTIVE_ORG], [{ adminCount: 1 }]]), auth);
       const res = await app.fetch(
         new Request(`${BASE}/callback?code=code&state=${nonce}`, {
           headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
