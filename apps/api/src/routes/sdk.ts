@@ -321,9 +321,6 @@ export function createSdkRouter(
 
     // Capture viewer country at connection time for per-connection geo evaluation.
     const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
-    // TODO: remove after geo debug
-    console.log('[sdk/stream] countryCode=%s envId=%s', countryCode, auth.environmentId);
-
     // Snapshot: updated on every flag toggle via notifyFlagChange; DB only on cold miss.
     const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _snapshotCache);
 
