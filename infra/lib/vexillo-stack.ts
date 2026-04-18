@@ -226,6 +226,19 @@ export class VexilloStack extends cdk.Stack {
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
     });
 
+    // No-cache policy for the SSE stream: TTL=0 so nothing is cached, but
+    // Authorization is listed so CloudFront forwards it to the origin (CF blocks
+    // Authorization in OriginRequestPolicy; it must travel via CachePolicy).
+    const sdkStreamCachePolicy = new cloudfront.CachePolicy(this, 'SdkStreamCachePolicy', {
+      cachePolicyName: 'vexillo-sdk-stream-no-cache',
+      defaultTtl: cdk.Duration.seconds(0),
+      maxTtl: cdk.Duration.seconds(1),
+      minTtl: cdk.Duration.seconds(0),
+      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization'),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+    });
+
     // SDK-specific policy: explicitly forwards CloudFront-Viewer-Country (a
     // CloudFront-generated header excluded from OriginRequestHeaderBehavior.all())
     // so the origin can apply geo-targeted flag evaluation.
@@ -317,7 +330,7 @@ export class VexilloStack extends cdk.Stack {
         '/api/sdk/flags/stream': {
           origin: albOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          cachePolicy: apiCachePolicy,
+          cachePolicy: sdkStreamCachePolicy,
           originRequestPolicy: sdkOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           compress: false,
