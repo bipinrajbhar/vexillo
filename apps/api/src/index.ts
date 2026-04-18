@@ -10,6 +10,8 @@ import { createAuth } from './lib/auth';
 import { createDashboardService } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
 import { createStreamRegistry } from './lib/stream-registry';
+import { createAuthCache } from './lib/auth-cache';
+import { createSnapshotCache } from './lib/snapshot-cache';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -18,6 +20,9 @@ if (!DATABASE_URL) {
 
 const db = createDbClient(DATABASE_URL, { max: 10 });
 const auth = createAuth(db);
+
+const authCache = createAuthCache();
+const snapshotCache = createSnapshotCache();
 
 // Optional Redis: enables cross-container SSE fan-out. Omit REDIS_URL to run
 // single-container (stream still works; toggles reach only local connections).
@@ -30,11 +35,16 @@ const streamRegistry = createStreamRegistry(redisClients?.subscriber);
 
 // With Redis: publish to the channel so all containers' subscribers pick it up.
 // Without Redis: broadcast directly into the local registry.
+// Either way, update the snapshot cache so the next SSE connect skips the DB.
 const notifyFlagChange = redisClients
-  ? (envId: string, payload: string) =>
-      redisClients.publisher.publish(`flags:env:${envId}`, payload)
-  : (envId: string, payload: string) =>
-      streamRegistry.broadcast(envId, payload);
+  ? (envId: string, payload: string) => {
+      snapshotCache.set(envId, payload);
+      return redisClients.publisher.publish(`flags:env:${envId}`, payload);
+    }
+  : (envId: string, payload: string) => {
+      snapshotCache.set(envId, payload);
+      return streamRegistry.broadcast(envId, payload);
+    };
 
 const dashboardService = createDashboardService(db, notifyFlagChange);
 
@@ -77,7 +87,7 @@ app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable
-const sdkRouter = createSdkRouter(db, streamRegistry);
+const sdkRouter = createSdkRouter(db, streamRegistry, authCache, snapshotCache);
 app.route('/api/sdk', sdkRouter);
 
 // OpenAPI spec + interactive docs (unauthenticated; internal use only)

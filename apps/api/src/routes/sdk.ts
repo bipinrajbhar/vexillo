@@ -4,6 +4,8 @@ import { apiKeys, environments, organizations, flags, flagStates, queryEnvironme
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
 import type { StreamRegistry } from '../lib/stream-registry';
+import type { AuthCache } from '../lib/auth-cache';
+import type { SnapshotCache } from '../lib/snapshot-cache';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -75,7 +77,12 @@ const getFlagsRoute = createRoute({
 
 // ── Router factory ────────────────────────────────────────────────────────────
 
-export function createSdkRouter(db: DbClient, streamRegistry?: StreamRegistry) {
+export function createSdkRouter(
+  db: DbClient,
+  streamRegistry?: StreamRegistry,
+  authCache?: AuthCache,
+  snapshotCache?: SnapshotCache,
+) {
   const sdk = new OpenAPIHono();
 
   // Register Bearer auth security scheme so it appears in the generated spec.
@@ -134,22 +141,26 @@ export function createSdkRouter(db: DbClient, streamRegistry?: StreamRegistry) {
 
     const hash = await hashKey(token);
 
-    // Single query: resolve API key → environment → org in one round-trip.
-    const [auth] = await db
-      .select({
-        environmentId: apiKeys.environmentId,
-        orgId: environments.orgId,
-        allowedOrigins: environments.allowedOrigins,
-        orgStatus: organizations.status,
-      })
-      .from(apiKeys)
-      .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
-      .innerJoin(organizations, eq(organizations.id, environments.orgId))
-      .where(eq(apiKeys.keyHash, hash))
-      .limit(1);
-
+    let auth = authCache?.get(hash) ?? null;
     if (!auth) {
-      return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
+      const [row] = await db
+        .select({
+          environmentId: apiKeys.environmentId,
+          orgId: environments.orgId,
+          allowedOrigins: environments.allowedOrigins,
+          orgStatus: organizations.status,
+        })
+        .from(apiKeys)
+        .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
+        .innerJoin(organizations, eq(organizations.id, environments.orgId))
+        .where(eq(apiKeys.keyHash, hash))
+        .limit(1);
+
+      if (!row) {
+        return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
+      }
+      auth = row;
+      authCache?.set(hash, auth);
     }
 
     if (auth.orgStatus === 'suspended') {
@@ -190,60 +201,63 @@ export function createSdkRouter(db: DbClient, streamRegistry?: StreamRegistry) {
 
     const hash = await hashKey(token);
 
-    const [apiKey] = await db
-      .select({ environmentId: apiKeys.environmentId })
-      .from(apiKeys)
-      .where(eq(apiKeys.keyHash, hash))
-      .limit(1);
+    // Auth: in-memory cache → single combined DB round-trip on miss.
+    let auth = authCache?.get(hash) ?? null;
+    if (!auth) {
+      const [row] = await db
+        .select({
+          environmentId: apiKeys.environmentId,
+          orgId: environments.orgId,
+          allowedOrigins: environments.allowedOrigins,
+          orgStatus: organizations.status,
+        })
+        .from(apiKeys)
+        .innerJoin(environments, eq(environments.id, apiKeys.environmentId))
+        .innerJoin(organizations, eq(organizations.id, environments.orgId))
+        .where(eq(apiKeys.keyHash, hash))
+        .limit(1);
 
-    if (!apiKey) {
-      return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
+      if (!row) {
+        return c.json({ error: 'Unauthorized' }, 401, SDK_ERROR_CORS_HEADERS);
+      }
+      auth = row;
+      authCache?.set(hash, auth);
     }
 
-    const [env] = await db
-      .select({
-        id: environments.id,
-        allowedOrigins: environments.allowedOrigins,
-        orgStatus: organizations.status,
-      })
-      .from(environments)
-      .innerJoin(organizations, eq(organizations.id, environments.orgId))
-      .where(eq(environments.id, apiKey.environmentId))
-      .limit(1);
-
-    if (!env) {
-      return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
-    }
-
-    if (env.orgStatus === 'suspended') {
+    if (auth.orgStatus === 'suspended') {
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
     const requestOrigin = c.req.header('origin');
-    const allowedOrigin = resolveAllowedOrigin(requestOrigin, env.allowedOrigins);
+    const allowedOrigin = resolveAllowedOrigin(requestOrigin, auth.allowedOrigins);
 
     if (allowedOrigin === null) {
       return c.json({ error: 'Forbidden' }, 403, SDK_ERROR_CORS_HEADERS);
     }
 
-    const rows = await db
-      .select({
-        key: flags.key,
-        enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
-      })
-      .from(flags)
-      .leftJoin(
-        flagStates,
-        and(
-          eq(flagStates.flagId, flags.id),
-          eq(flagStates.environmentId, apiKey.environmentId),
-        ),
-      )
-      .orderBy(asc(flags.key));
+    // Snapshot: cache is written on every flag toggle; DB only on cold miss.
+    let snapshot = snapshotCache?.get(auth.environmentId) ?? null;
+    if (!snapshot) {
+      const rows = await db
+        .select({
+          key: flags.key,
+          enabled: sql<boolean>`COALESCE(${flagStates.enabled}, false)`,
+        })
+        .from(flags)
+        .leftJoin(
+          flagStates,
+          and(
+            eq(flagStates.flagId, flags.id),
+            eq(flagStates.environmentId, auth.environmentId),
+          ),
+        )
+        .orderBy(asc(flags.key));
 
-    const snapshot = JSON.stringify({
-      flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
-    });
+      snapshot = JSON.stringify({
+        flags: rows.map((r) => ({ key: r.key, enabled: r.enabled })),
+      });
+      snapshotCache?.set(auth.environmentId, snapshot);
+    }
 
     const encoder = new TextEncoder();
 
@@ -295,7 +309,7 @@ export function createSdkRouter(db: DbClient, streamRegistry?: StreamRegistry) {
     await writer.write(buildEvent(snapshot, 1000));
 
     if (streamRegistry) {
-      unregisterStream = streamRegistry.register(env.id, (payload) => {
+      unregisterStream = streamRegistry.register(auth.environmentId, (payload) => {
         writer.write(buildEvent(payload)).catch(() => {});
       });
     }
