@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, type FormEvent } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Plus, Search, ChevronDown, MoreHorizontal } from 'lucide-react'
+import { Plus, Search, ChevronDown, MoreHorizontal, X, Globe } from 'lucide-react'
 import { toast } from 'sonner'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -340,6 +340,176 @@ function CreateFlagDialog({
   )
 }
 
+// ── Country Rules Dialog ─────────────────────────────────────────────────────
+
+const regionNames = (() => {
+  try { return new Intl.DisplayNames(['en'], { type: 'region' }) } catch { return null }
+})()
+
+function countryLabel(code: string) {
+  try { return regionNames?.of(code) ?? code } catch { return code }
+}
+
+function CountryRulesDialog({
+  flag,
+  orgSlug,
+  environments,
+  isAdmin,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  flag: FlagRow | null
+  orgSlug: string
+  environments: Env[]
+  isAdmin: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSaved: () => void
+}) {
+  const [rules, setRules] = useState<Record<string, string[]>>({})
+  const [inputs, setInputs] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!flag) return
+    const init: Record<string, string[]> = {}
+    for (const env of environments) {
+      init[env.id] = flag.countryRules[env.slug] ?? []
+    }
+    setRules(init)
+    setInputs({})
+  }, [flag, environments, open])
+
+  function addCountry(envId: string) {
+    const code = (inputs[envId] ?? '').toUpperCase().trim()
+    if (!code || !/^[A-Z]{2}$/.test(code)) return
+    if ((rules[envId] ?? []).includes(code)) return
+    setRules((prev) => ({ ...prev, [envId]: [...(prev[envId] ?? []), code] }))
+    setInputs((prev) => ({ ...prev, [envId]: '' }))
+  }
+
+  function removeCountry(envId: string, code: string) {
+    setRules((prev) => ({ ...prev, [envId]: (prev[envId] ?? []).filter((c) => c !== code) }))
+  }
+
+  async function handleSave(env: Env) {
+    if (!flag || saving) return
+    setSaving(env.id)
+    try {
+      await api.flags.updateCountryRules(orgSlug, flag.key, env.id, rules[env.id] ?? [])
+      onSaved()
+      toast.success(`Country rules updated for ${env.name}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save country rules')
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Country targeting — {flag?.name}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground -mt-1">
+          Only listed countries will see this flag as enabled. Leave empty to use the environment toggle for all countries.
+        </p>
+        {environments.length === 0 ? (
+          <p className="py-4 text-sm text-muted-foreground text-center">No environments yet.</p>
+        ) : (
+          <div className="divide-y divide-border -mx-4 border-t">
+            {environments.map((env) => {
+              const envRules = rules[env.id] ?? []
+              const original = [...(flag?.countryRules[env.slug] ?? [])].sort().join(',')
+              const current = [...envRules].sort().join(',')
+              const isDirty = current !== original
+
+              return (
+                <div key={env.id} className="px-4 py-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">{env.name}</p>
+                    {envRules.length === 0 ? (
+                      <Badge variant="secondary" className="text-[0.7rem]">All countries</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[0.7rem]">
+                        {envRules.length} {envRules.length === 1 ? 'country' : 'countries'}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {envRules.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {envRules.map((code) => (
+                        <Badge key={code} variant="secondary" className="gap-1 font-mono text-[0.7rem]">
+                          {code}
+                          <span className="font-sans opacity-60">{countryLabel(code)}</span>
+                          {isAdmin && (
+                            <button
+                              onClick={() => removeCountry(env.id, code)}
+                              className="ml-0.5 rounded hover:text-destructive focus-visible:outline-none"
+                              aria-label={`Remove ${code}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+
+                  {isAdmin && (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={inputs[env.id] ?? ''}
+                        onChange={(e) => setInputs((prev) => ({ ...prev, [env.id]: e.target.value }))}
+                        placeholder="US"
+                        maxLength={2}
+                        className="h-7 w-16 text-xs font-mono uppercase"
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCountry(env.id) } }}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => addCountry(env.id)}
+                        disabled={!(inputs[env.id] ?? '').trim()}
+                        className="h-7 px-2 text-xs shrink-0"
+                      >
+                        Add
+                      </Button>
+                      <div className="flex-1" />
+                      {envRules.length > 0 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setRules((prev) => ({ ...prev, [env.id]: [] }))}
+                          className="h-7 px-2 text-xs text-muted-foreground"
+                        >
+                          Clear all
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={() => handleSave(env)}
+                        disabled={!isDirty || !!saving}
+                        className="h-7 px-3 text-xs"
+                      >
+                        {saving === env.id ? 'Saving…' : 'Save'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+        <DialogFooter showCloseButton />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -353,6 +523,7 @@ export function FlagsPage() {
   const [flagToDelete, setFlagToDelete] = useState<FlagRow | null>(null)
   const [flagToEdit, setFlagToEdit] = useState<FlagRow | null>(null)
   const [flagToRollout, setFlagToRollout] = useState<FlagRow | null>(null)
+  const [flagToCountry, setFlagToCountry] = useState<FlagRow | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -429,10 +600,21 @@ export function FlagsPage() {
         size: 100,
         cell: ({ row }) => {
           const isOn = selectedEnv ? !!row.original.states[selectedEnv.slug] : null
-          return isOn === null ? (
-            <span className="text-muted-foreground">—</span>
-          ) : (
-            <Badge variant={isOn ? 'success' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
+          const geoCount = selectedEnv ? (row.original.countryRules?.[selectedEnv.slug] ?? []).length : 0
+          return (
+            <div className="flex items-center gap-1.5">
+              {isOn === null ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                <Badge variant={isOn ? 'success' : 'secondary'}>{isOn ? 'On' : 'Off'}</Badge>
+              )}
+              {geoCount > 0 && (
+                <Badge variant="outline" className="gap-0.5 text-[0.7rem] text-muted-foreground">
+                  <Globe className="h-2.5 w-2.5" />
+                  {geoCount}
+                </Badge>
+              )}
+            </div>
           )
         },
       },
@@ -459,6 +641,9 @@ export function FlagsPage() {
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setFlagToRollout(flag)}>
                     Rollout
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setFlagToCountry(flag)}>
+                    Country targeting
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -702,6 +887,16 @@ export function FlagsPage() {
         open={!!flagToEdit}
         onOpenChange={(v) => { if (!v) setFlagToEdit(null) }}
         onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+      />
+
+      <CountryRulesDialog
+        flag={flagToCountry}
+        orgSlug={org.slug}
+        environments={environments}
+        isAdmin={isAdmin}
+        open={!!flagToCountry}
+        onOpenChange={(v) => { if (!v) setFlagToCountry(null) }}
+        onSaved={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
       />
 
       <AlertDialog open={!!flagToDelete} onOpenChange={(open) => { if (!open) setFlagToDelete(null) }}>

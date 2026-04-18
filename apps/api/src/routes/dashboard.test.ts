@@ -160,7 +160,7 @@ describe('GET /api/dashboard/:orgSlug/context', () => {
 
 describe('GET /api/dashboard/:orgSlug/flags', () => {
   it('returns flags and environments', async () => {
-    const flags = [{ id: 'f1', name: 'My Flag', key: 'my-flag', description: '', createdAt: new Date(), createdByName: null, states: { prod: true, staging: false } }];
+    const flags = [{ id: 'f1', name: 'My Flag', key: 'my-flag', description: '', createdAt: new Date(), createdByName: null, states: { prod: true, staging: false }, countryRules: {} }];
     const environments = [{ id: 'e1', name: 'Production', slug: 'prod' }, { id: 'e2', name: 'Staging', slug: 'staging' }];
 
     const app = makeApp(
