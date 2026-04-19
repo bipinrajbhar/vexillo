@@ -265,12 +265,15 @@ export class VexilloStack extends cdk.Stack {
     //   - No external font, script, or image origins — all assets are self-hosted.
     const spaResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'SpaResponseHeaders', {
       responseHeadersPolicyName: 'vexillo-spa-security-headers',
-      // Ensures CloudFront's custom error pages (403→index.html, 404→index.html)
-      // carry ACAO so the SDK can read API error responses cross-origin.
-      customHeadersBehavior: {
-        customHeaders: [
-          { header: 'Access-Control-Allow-Origin', value: '*', override: false },
-        ],
+      // Ensures CloudFront custom error pages (403/404 → index.html) carry ACAO
+      // so SDK clients can read API error responses cross-origin. override:false
+      // means API behaviors that already set their own ACAO are unaffected.
+      corsBehavior: {
+        accessControlAllowCredentials: false,
+        accessControlAllowHeaders: ['Authorization', 'Content-Type'],
+        accessControlAllowMethods: ['GET', 'HEAD', 'OPTIONS'],
+        accessControlAllowOrigins: ['*'],
+        originOverride: false,
       },
       securityHeadersBehavior: {
         contentTypeOptions: { override: true },
@@ -339,7 +342,7 @@ export class VexilloStack extends cdk.Stack {
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: sdkStreamCachePolicy,
           originRequestPolicy: sdkOriginRequestPolicy,
-          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
           compress: false,
         },
         '/api/*': {
