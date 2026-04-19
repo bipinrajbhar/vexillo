@@ -22,14 +22,12 @@ graph TD
     subgraph Primary["Primary Region (us-east-1)"]
         ALB_P["ALB"]
         ECS_P["ECS Fargate\n(2–4 tasks)"]
-        Redis_P["ElastiCache Redis\n(optional)"]
         RDS["RDS Postgres"]
     end
 
     subgraph Secondary["Secondary Region (eu-west-1, …)"]
         ALB_S["ALB"]
         ECS_S["ECS Fargate\n(2–4 tasks)"]
-        Redis_S["ElastiCache Redis\n(optional)"]
     end
 
     Dashboard -->|"GET /"| CF
@@ -44,12 +42,10 @@ graph TD
 
     ALB_P --> ECS_P
     ECS_P --> RDS
-    ECS_P <-->|"pub/sub"| Redis_P
 
     ECS_P -->|"POST /internal/flag-change\n(fire-and-forget)"| ALB_S
     ALB_S --> ECS_S
     ECS_S -->|"cross-region read"| RDS
-    ECS_S <-->|"pub/sub"| Redis_S
 ```
 
 ---
@@ -61,29 +57,27 @@ When an admin toggles a flag in the dashboard, updates reach all connected clien
 ```mermaid
 sequenceDiagram
     participant Admin as Dashboard UI
-    participant API as ECS (primary)
+    participant API as ECS (primary, task that handled request)
     participant DB as RDS
     participant Cache as snapshotCache
-    participant Redis as Redis (primary)
-    participant SSE_P as SSE clients (primary)
+    participant SSE_P as SSE clients (same task only)
     participant Sec as ECS (secondary)
-    participant Redis_S as Redis (secondary)
-    participant SSE_S as SSE clients (secondary)
+    participant SSE_S as SSE clients (secondary, same task only)
 
     Admin->>API: POST /api/dashboard/.../toggle
     API->>DB: UPDATE flagStates SET enabled = …
     API->>Cache: snapshotCache.set(envId, payload)
     API-->>Sec: POST /internal/flag-change (fire-and-forget)
-    API->>Redis: PUBLISH flags:env:{envId}
-    Redis-->>SSE_P: broadcast snapshot
+    API->>SSE_P: in-process broadcast (streamRegistry)
     SSE_P-->>Admin: SSE event (if streaming)
 
     Sec->>Cache: snapshotCache.set(envId, payload)
-    Sec->>Redis_S: PUBLISH flags:env:{envId}
-    Redis_S-->>SSE_S: broadcast snapshot
+    Sec->>SSE_S: in-process broadcast (streamRegistry)
 ```
 
 The fan-out to secondary regions is fire-and-forget — it does not block the primary's response. If the secondary misses an event, its `snapshotCache` expires after 30 s and the next request re-queries RDS in us-east-1 as a fallback.
+
+> **Multi-task SSE limitation:** SSE broadcasts are in-process only. A toggle handled by task A is not seen by SSE clients connected to tasks B, C, or D. Those clients receive the update when their `snapshotCache` expires (≤30 s) or when they reconnect. To fan-out across all tasks in a region, set `REDIS_URL` — the app uses Redis pub/sub when the variable is present, but Redis is not provisioned by the CDK stack.
 
 ---
 
@@ -112,12 +106,13 @@ At 1M visits/month, over 95% of requests are served from CloudFront without reac
 
 ## Streaming — Connection Lifecycle
 
+SSE broadcasts are in-process within a single ECS task. If `REDIS_URL` is set, the app uses Redis pub/sub to fan out across all tasks; otherwise only clients on the same task as the toggle receive the real-time event.
+
 ```mermaid
 sequenceDiagram
     participant SDK as SDK (streaming mode)
     participant CF as CloudFront
-    participant ECS as ECS
-    participant Redis as Redis
+    participant ECS as ECS (one task)
 
     SDK->>CF: GET /api/sdk/flags (REST race)
     SDK->>CF: GET /api/sdk/flags/stream (SSE)
@@ -125,11 +120,9 @@ sequenceDiagram
     ECS-->>SDK: {flags: […]} → isReady = true
 
     CF-->>ECS: /api/sdk/flags/stream (no cache)
-    ECS->>Redis: SUBSCRIBE flags:env:{envId}
     ECS-->>SDK: SSE: initial snapshot (overwrites REST)
 
-    loop on flag toggle
-        Redis-->>ECS: message: new snapshot
+    loop on flag toggle (same task only without Redis)
         ECS-->>SDK: SSE: updated snapshot
     end
 
@@ -138,7 +131,6 @@ sequenceDiagram
     end
 
     SDK->>ECS: disconnect / reconnect
-    ECS->>Redis: UNSUBSCRIBE (if last client for env)
 ```
 
 The REST race on connect means `isReady` is `true` and components render with real values before the SSE handshake completes. The SSE snapshot then overwrites the cached REST value once it arrives.
@@ -147,11 +139,15 @@ The REST race on connect means `isReady` is `true` and components render with re
 
 ## Infrastructure Summary
 
-| Component               | Detail                                                                                                             |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| CloudFront              | Global CDN; caches `/api/sdk/flags` at edge (300 s + 60 s SWR); no cache for dashboard or SSE                      |
-| ECS Fargate             | 256 CPU / 512 MB per task; 2 min, 4 max; scales at 65% CPU; 120 s idle timeout (SSE kept alive by 25 s keepalives) |
-| RDS Postgres            | t4g.micro; primary region only; isolated VPC subnet; 7-day backup retention                                        |
-| ElastiCache Redis       | Optional; required for multi-container SSE fan-out; one channel per environment (`flags:env:{envId}`)              |
-| Secondary regions       | No RDS — read primary's DB via `DATABASE_URL`; local Redis for in-region SSE fan-out                               |
-| `/internal/flag-change` | ALB-only route (not exposed via CloudFront); protected by `X-Internal-Secret` header                               |
+What the CDK stack (`infra/lib/vexillo-stack.ts`) actually provisions:
+
+| Component | Detail |
+|---|---|
+| CloudFront | Global CDN; caches `/api/sdk/flags` at edge (300 s + 60 s SWR); no cache for dashboard or SSE |
+| ECS Fargate | 256 CPU / 512 MB per task; 2 min, 4 max; scales at 65% CPU; 120 s idle timeout (SSE kept alive by 25 s keepalives) |
+| RDS Postgres | t4g.micro; primary region only; isolated VPC subnet; 7-day backup retention |
+| S3 | SPA assets (dashboard); private bucket, served via CloudFront OAC |
+| Secondary regions | No RDS — ECS tasks in the secondary connect to the primary's RDS via `DATABASE_URL` |
+| `/internal/flag-change` | ALB-only route (not exposed via CloudFront); protected by `X-Internal-Secret` header |
+
+> **Redis is not provisioned by CDK.** The app supports it via `REDIS_URL` for cross-task SSE fan-out, but it must be provisioned and wired up manually.
