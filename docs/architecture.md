@@ -65,30 +65,29 @@ sequenceDiagram
     participant DB as RDS
     participant Cache as snapshotCache
     participant Redis as Redis (optional)
-    participant SSE_P as SSE clients (primary)
+    participant SDK_P as SDK clients (primary)
     participant Sec as ECS (secondary)
-    participant Redis_S as Redis secondary (optional)
-    participant SSE_S as SSE clients (secondary)
+    participant Redis_S as Redis (secondary, optional)
+    participant SDK_S as SDK clients (secondary)
 
     Admin->>API: POST /api/dashboard/.../toggle
     API->>DB: UPDATE flagStates SET enabled = …
     API->>Cache: snapshotCache.set(envId, payload)
     API-->>Sec: POST /internal/flag-change (fire-and-forget)
 
-    alt REDIS_URL set
+    alt REDIS_URL set — fan-out across all tasks
         API->>Redis: PUBLISH flags:env:{envId}
-        Redis-->>SSE_P: broadcast to all tasks
-    else no Redis
-        API->>SSE_P: in-process broadcast (same task only)
+        Redis-->>SDK_P: subscriber fires on all ECS tasks → streamRegistry.broadcast() → SSE event
+    else no Redis — same task only
+        API-->>SDK_P: streamRegistry.broadcast() → SSE event (this task's clients only)
     end
-    SSE_P-->>Admin: SSE event (if streaming)
 
     Sec->>Cache: snapshotCache.set(envId, payload)
-    alt REDIS_URL set
+    alt REDIS_URL set — fan-out across all tasks
         Sec->>Redis_S: PUBLISH flags:env:{envId}
-        Redis_S-->>SSE_S: broadcast to all tasks
-    else no Redis
-        Sec->>SSE_S: in-process broadcast (same task only)
+        Redis_S-->>SDK_S: subscriber fires on all ECS tasks → streamRegistry.broadcast() → SSE event
+    else no Redis — same task only
+        Sec-->>SDK_S: streamRegistry.broadcast() → SSE event (this task's clients only)
     end
 ```
 
