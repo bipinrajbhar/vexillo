@@ -297,7 +297,7 @@ function CountryPicker({
           style={{
             position: 'fixed',
             top: rect.bottom + 4,
-            right: window.innerWidth - rect.right,
+            left: rect.left,
             zIndex: 9999,
             width: 280,
           }}
