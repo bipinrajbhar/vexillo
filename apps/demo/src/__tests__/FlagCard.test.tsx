@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import React from "react";
 import {
@@ -50,5 +50,16 @@ describe("FlagCard", () => {
       </VexilloClientProvider>,
     );
     expect(screen.getByTestId("loading-my-flag")).toBeTruthy();
+  });
+
+  it("updates display in real time when the flag value changes", async () => {
+    const client = renderFlagCard("live-flag", { "live-flag": false });
+    expect(screen.getByTestId("value-live-flag").textContent).toBe("OFF");
+
+    await act(async () => {
+      client.override({ "live-flag": true });
+    });
+
+    expect(screen.getByTestId("value-live-flag").textContent).toBe("ON");
   });
 });
