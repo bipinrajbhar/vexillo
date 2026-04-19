@@ -22,12 +22,14 @@ graph TD
     subgraph Primary["Primary Region (us-east-1)"]
         ALB_P["ALB"]
         ECS_P["ECS Fargate\n(2–4 tasks)"]
+        Redis_P["Redis\n(optional, REDIS_URL)"]
         RDS["RDS Postgres"]
     end
 
     subgraph Secondary["Secondary Region (eu-west-1, …)"]
         ALB_S["ALB"]
         ECS_S["ECS Fargate\n(2–4 tasks)"]
+        Redis_S["Redis\n(optional, REDIS_URL)"]
     end
 
     Dashboard -->|"GET /"| CF
@@ -42,10 +44,12 @@ graph TD
 
     ALB_P --> ECS_P
     ECS_P --> RDS
+    ECS_P -. "pub/sub (if REDIS_URL set)" .-> Redis_P
 
     ECS_P -->|"POST /internal/flag-change\n(fire-and-forget)"| ALB_S
     ALB_S --> ECS_S
     ECS_S -->|"cross-region read"| RDS
+    ECS_S -. "pub/sub (if REDIS_URL set)" .-> Redis_S
 ```
 
 ---
@@ -57,22 +61,35 @@ When an admin toggles a flag in the dashboard, updates reach all connected clien
 ```mermaid
 sequenceDiagram
     participant Admin as Dashboard UI
-    participant API as ECS (primary, task that handled request)
+    participant API as ECS (primary)
     participant DB as RDS
     participant Cache as snapshotCache
-    participant SSE_P as SSE clients (same task only)
+    participant Redis as Redis (optional)
+    participant SSE_P as SSE clients (primary)
     participant Sec as ECS (secondary)
-    participant SSE_S as SSE clients (secondary, same task only)
+    participant Redis_S as Redis secondary (optional)
+    participant SSE_S as SSE clients (secondary)
 
     Admin->>API: POST /api/dashboard/.../toggle
     API->>DB: UPDATE flagStates SET enabled = …
     API->>Cache: snapshotCache.set(envId, payload)
     API-->>Sec: POST /internal/flag-change (fire-and-forget)
-    API->>SSE_P: in-process broadcast (streamRegistry)
+
+    alt REDIS_URL set
+        API->>Redis: PUBLISH flags:env:{envId}
+        Redis-->>SSE_P: broadcast to all tasks
+    else no Redis
+        API->>SSE_P: in-process broadcast (same task only)
+    end
     SSE_P-->>Admin: SSE event (if streaming)
 
     Sec->>Cache: snapshotCache.set(envId, payload)
-    Sec->>SSE_S: in-process broadcast (streamRegistry)
+    alt REDIS_URL set
+        Sec->>Redis_S: PUBLISH flags:env:{envId}
+        Redis_S-->>SSE_S: broadcast to all tasks
+    else no Redis
+        Sec->>SSE_S: in-process broadcast (same task only)
+    end
 ```
 
 The fan-out to secondary regions is fire-and-forget — it does not block the primary's response. If the secondary misses an event, its `snapshotCache` expires after 30 s and the next request re-queries RDS in us-east-1 as a fallback.
