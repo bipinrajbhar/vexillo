@@ -77,7 +77,7 @@ sequenceDiagram
 
 The fan-out to secondary regions is fire-and-forget — it does not block the primary's response. If the secondary misses an event, its `snapshotCache` expires after 30 s and the next request re-queries RDS in us-east-1 as a fallback.
 
-> **Multi-task SSE limitation:** SSE broadcasts are in-process only. A toggle handled by task A is not seen by SSE clients connected to tasks B, C, or D. Those clients receive the update when their `snapshotCache` expires (≤30 s) or when they reconnect. To fan-out across all tasks in a region, set `REDIS_URL` — the app uses Redis pub/sub when the variable is present, but Redis is not provisioned by the CDK stack.
+> **Multi-task SSE limitation:** SSE broadcasts are in-process only. A toggle handled by task A is not seen by SSE clients connected to tasks B, C, or D. Those clients receive the update when their `snapshotCache` expires (≤30 s) or when they reconnect. To fan-out across all tasks in a region, set `REDIS_URL` — the app uses Bun's native `RedisClient` for pub/sub when the variable is present, but the Redis instance is not provisioned by the CDK stack.
 
 ---
 
@@ -106,7 +106,7 @@ At 1M visits/month, over 95% of requests are served from CloudFront without reac
 
 ## Streaming — Connection Lifecycle
 
-SSE broadcasts are in-process within a single ECS task. If `REDIS_URL` is set, the app uses Redis pub/sub to fan out across all tasks; otherwise only clients on the same task as the toggle receive the real-time event.
+SSE broadcasts are in-process within a single ECS task. If `REDIS_URL` is set, the app uses Bun's native `RedisClient` for pub/sub to fan out across all tasks; otherwise only clients on the same task as the toggle receive the real-time event.
 
 ```mermaid
 sequenceDiagram
@@ -150,4 +150,4 @@ What the CDK stack (`infra/lib/vexillo-stack.ts`) actually provisions:
 | Secondary regions | No RDS — ECS tasks in the secondary connect to the primary's RDS via `DATABASE_URL` |
 | `/internal/flag-change` | ALB-only route (not exposed via CloudFront); protected by `X-Internal-Secret` header |
 
-> **Redis is not provisioned by CDK.** The app supports it via `REDIS_URL` for cross-task SSE fan-out, but it must be provisioned and wired up manually.
+> **Redis is not provisioned by CDK.** The app uses Bun's native `RedisClient` (imported from `'bun'`) for cross-task SSE fan-out when `REDIS_URL` is set, but the Redis instance itself must be provisioned and wired up manually.
