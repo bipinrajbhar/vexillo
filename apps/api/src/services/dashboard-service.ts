@@ -38,6 +38,7 @@ import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
 export type NotifyFlagChange = (environmentId: string, payload: string) => void | Promise<void>;
+export type ClearAuthCache = () => void;
 
 // ── Domain errors ──────────────────────────────────────────────────────────────
 
@@ -153,7 +154,7 @@ export interface DashboardService {
 const TTL = 30_000;
 const MAX = 200;
 
-export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFlagChange): DashboardService {
+export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFlagChange, clearAuthCache?: ClearAuthCache): DashboardService {
   const flagsCache = new LRUCache<string, { flags: FlagWithStates[]; environments: EnvRef[] }>({ max: MAX, ttl: TTL });
   const envsCache = new LRUCache<string, EnvironmentWithKey[]>({ max: MAX, ttl: TTL });
   const membersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
@@ -276,6 +277,7 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       if (!result) throw new NotFoundError('Environment not found');
       await insertAuditLog(db, { orgId, actorId, action: 'environment.update_origins', targetType: 'environment', targetId: id, metadata: { allowedOrigins } });
       envsCache.delete(orgId);
+      clearAuthCache?.();
       return result;
     },
 

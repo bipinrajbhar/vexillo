@@ -15,5 +15,6 @@ export function createAuthCache(ttlMs = 30_000, max = 1_000) {
     get: (key: string): AuthEntry | null => store.get(key) ?? null,
     set: (key: string, entry: AuthEntry): void => { store.set(key, entry); },
     isStale: (key: string): boolean => store.has(key) && store.getRemainingTTL(key) === 0,
+    clear: (): void => { store.clear(); },
   };
 }

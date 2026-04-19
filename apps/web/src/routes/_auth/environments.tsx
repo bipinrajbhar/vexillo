@@ -289,6 +289,7 @@ function ManageOriginsDialog({
     try {
       await api.environments.patch(orgSlug, env.id, origins)
       onUpdated(env.id, origins)
+      onOpenChange(false)
       toast.success('Allowed origins saved')
     } catch (err) {
       setOrigins(env.allowedOrigins)

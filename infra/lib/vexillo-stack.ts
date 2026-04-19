@@ -204,7 +204,7 @@ export class VexilloStack extends cdk.Stack {
       defaultTtl: cdk.Duration.seconds(300),
       maxTtl: cdk.Duration.seconds(600),
       minTtl: cdk.Duration.seconds(0),
-      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization', 'CloudFront-Viewer-Country'),
+      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization', 'CloudFront-Viewer-Country', 'Origin'),
       queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
       cookieBehavior: cloudfront.CacheCookieBehavior.none(),
     });
@@ -265,6 +265,13 @@ export class VexilloStack extends cdk.Stack {
     //   - No external font, script, or image origins — all assets are self-hosted.
     const spaResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'SpaResponseHeaders', {
       responseHeadersPolicyName: 'vexillo-spa-security-headers',
+      // Ensures CloudFront's custom error pages (403→index.html, 404→index.html)
+      // carry ACAO so the SDK can read API error responses cross-origin.
+      customHeadersBehavior: {
+        customHeaders: [
+          { header: 'Access-Control-Allow-Origin', value: '*', override: false },
+        ],
+      },
       securityHeadersBehavior: {
         contentTypeOptions: { override: true },
         frameOptions: {
