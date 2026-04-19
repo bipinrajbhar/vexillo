@@ -19,6 +19,8 @@ Hono API server running on Bun. Handles authentication, the dashboard API, the p
 | `OKTA_SECRET_KEY` | 64-char hex string for encrypting per-org Okta client secrets at rest — generate with `openssl rand -hex 32` |
 | `SUPER_ADMIN_EMAILS` | Comma-separated emails auto-promoted to super-admin on first sign-in |
 | `REDIS_URL` | _(Optional)_ Redis connection string, e.g. `redis://localhost:6379`. Enables cross-container SSE fan-out. Omit for single-container deployments — flag toggles still reach all local SSE connections. |
+| `INTERNAL_SECRET` | _(Optional)_ Shared secret for cross-region propagation. The primary region includes it as `X-Internal-Secret` on outbound POSTs; each secondary verifies it on inbound requests. Must be identical in all regions. If unset a random value is generated at startup. |
+| `SECONDARY_REGION_URLS` | _(Optional)_ Comma-separated ALB base URLs of secondary regions, e.g. `https://eu-alb.example.com,https://ap-alb.example.com`. Set only on the primary. Leave empty or unset in secondary regions. |
 
 > Per-org Okta credentials are stored encrypted in the database and configured via the super-admin dashboard, not via environment variables.
 
@@ -52,6 +54,7 @@ The API starts on `http://localhost:3000` with hot reload.
 | `GET /api/sdk/flags/stream` | API key | SSE stream — delivers the full flag snapshot immediately, then pushes a new snapshot on every toggle. Keepalive comment every 25 s. Includes `id:` and `retry:` fields per the SSE spec. |
 | `/api/dashboard/*` | Session (org member) | Org dashboard — flags, environments, members, API keys |
 | `/api/superadmin/*` | Super-admin | Org CRUD, Okta config, status management |
+| `POST /internal/flag-change` | `X-Internal-Secret` header | Cross-region propagation — receives a flag snapshot from the primary region, writes it to the local snapshot cache, and broadcasts to locally connected SSE clients. Not exposed via CloudFront; only accessible via the ALB directly. |
 
 ### Dashboard access levels
 
@@ -83,6 +86,30 @@ On a warm connection (same API key, at least one recent toggle) SSE stream conne
 | `GET /api/sdk/flags/stream` | `no-cache` | Not cached (TTL=0 stream policy) |
 
 > SDK clients using `connectStream()` fetch `GET /api/sdk/flags` first (CDN cache hit, typically < 50 ms) to populate flags immediately, then open the SSE connection for real-time updates. The SSE snapshot overwrites the cached REST response once the stream connects.
+
+## Multi-region propagation
+
+When `SECONDARY_REGION_URLS` is set, every call to `notifyFlagChange` (triggered by a flag toggle or country rule update on the primary region) fires a **fire-and-forget** HTTP POST to each secondary region's `/internal/flag-change` endpoint:
+
+```
+POST https://<secondary-alb>/internal/flag-change
+X-Internal-Secret: <INTERNAL_SECRET>
+Content-Type: application/json
+
+{ "envId": "<environmentId>", "payload": "<flag snapshot JSON>" }
+```
+
+The secondary:
+1. Validates `X-Internal-Secret` — returns 401 if missing or wrong.
+2. Writes `payload` to its local `snapshotCache`.
+3. Publishes to its local Redis pub/sub channel (or broadcasts directly if no Redis), pushing the snapshot to all SSE clients connected to that region.
+
+A failure (network error, non-2xx response) is logged but does not block the primary's response. The secondary falls back to serving stale snapshots until its 30 s cache TTL expires and it refetches from RDS.
+
+**Setup** (operator steps after deploying a secondary region):
+1. Generate a shared secret: `openssl rand -hex 32`
+2. Store it as `/vexillo/INTERNAL_SECRET` SecureString in SSM in **every** region.
+3. After the secondary stack is deployed, copy its ALB DNS name into `/vexillo/SECONDARY_REGION_URLS` in the primary region's SSM, then redeploy the primary ECS service to pick up the new value.
 
 ## Auth
 

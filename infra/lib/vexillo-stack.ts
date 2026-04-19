@@ -12,18 +12,35 @@ import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
+export interface VexilloStackProps extends cdk.StackProps {
+  /**
+   * Set to false for secondary regions (eu-west-1, ap-*, etc.).
+   * When false: RDS is not created; ECS tasks connect to the primary's RDS
+   * via the same DATABASE_URL SSM parameter. Defaults to true.
+   */
+  isPrimary?: boolean;
+}
+
 /**
- * VexilloStack — single-region AWS deployment.
+ * VexilloStack — multi-region AWS deployment.
  *
  * Architecture:
  *   CloudFront → S3 (default, Vite SPA)
  *              → ALB → ECS Fargate (/api/*, 30s cache on /api/sdk/flags)
- *   ECS Fargate → RDS Postgres (isolated subnet, same VPC)
+ *   ECS Fargate → RDS Postgres (isolated subnet; primary region only)
  *   ECR        ← CI/CD (docker push + ecs update-service)
  *   SSM        ← operator sets real secret values via setup.sh
+ *
+ * Multi-region:
+ *   Primary (us-east-1): owns RDS, fans out flag changes to secondary ALBs via
+ *     SECONDARY_REGION_URLS → POST /internal/flag-change.
+ *   Secondary (eu-west-1, …): no RDS construct; DATABASE_URL points at the
+ *     primary's RDS; receives flag changes via /internal/flag-change and
+ *     broadcasts to its local Redis pub/sub channel.
  */
 export class VexilloStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: VexilloStackProps = {}) {
+    const { isPrimary = true } = props;
     super(scope, id, props);
 
     // ── SSM Parameters ────────────────────────────────────────────────────────
@@ -39,6 +56,9 @@ export class VexilloStack extends cdk.Stack {
       '/vexillo/BETTER_AUTH_URL',
       '/vexillo/BETTER_AUTH_TRUSTED_ORIGINS',
       '/vexillo/SUPER_ADMIN_EMAILS',
+      // Primary: comma-separated secondary ALB base URLs (e.g. "https://eu-alb.example.com").
+      // Secondary: leave as placeholder — an empty value means no fan-out is performed.
+      '/vexillo/SECONDARY_REGION_URLS',
     ] as const) {
       const id = name.replace(/\//g, '').replace(/_/g, '');
       ssmParams[name] = new ssm.StringParameter(this, `Param${id}`, {
@@ -47,9 +67,9 @@ export class VexilloStack extends cdk.Stack {
       });
     }
 
-    // DATABASE_URL, BETTER_AUTH_SECRET, and OKTA_SECRET_KEY must be SecureString —
-    // CDK cannot create SecureString parameters. setup.sh creates placeholders
-    // automatically before running 'cdk deploy'.
+    // DATABASE_URL, BETTER_AUTH_SECRET, OKTA_SECRET_KEY, and INTERNAL_SECRET must
+    // be SecureString — CDK cannot create SecureString parameters. setup.sh creates
+    // placeholders automatically before running 'cdk deploy'.
     const databaseUrlParam = ssm.StringParameter.fromSecureStringParameterAttributes(
       this, 'ParamvexilloDATABASEURL', { parameterName: '/vexillo/DATABASE_URL' },
     );
@@ -58,6 +78,11 @@ export class VexilloStack extends cdk.Stack {
     );
     const oktaSecretKeyParam = ssm.StringParameter.fromSecureStringParameterAttributes(
       this, 'ParamvexilloOKTASECRETKEY', { parameterName: '/vexillo/OKTA_SECRET_KEY' },
+    );
+    // Shared secret used by the primary to sign /internal/flag-change requests
+    // and by each secondary to verify them. Must be identical in all regions.
+    const internalSecretParam = ssm.StringParameter.fromSecureStringParameterAttributes(
+      this, 'ParamvexilloINTERNALSECRET', { parameterName: '/vexillo/INTERNAL_SECRET' },
     );
 
     // ── VPC ──────────────────────────────────────────────────────────────────
@@ -80,28 +105,35 @@ export class VexilloStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    const rdsSg = new ec2.SecurityGroup(this, 'RdsSg', {
-      vpc,
-      description: 'RDS Postgres - accept from ECS API',
-      allowAllOutbound: false,
-    });
-    rdsSg.addIngressRule(apiSg, ec2.Port.tcp(5432), 'Allow Postgres from ECS API');
+    // ── RDS Postgres (primary region only) ────────────────────────────────────
+    // Secondary regions connect to the primary's RDS via DATABASE_URL; they do
+    // not provision their own instance. Cross-region DB reads add ~80–100ms
+    // latency but only occur on cold cache misses (hot path is served from
+    // snapshotCache and authCache).
+    let database: rds.DatabaseInstance | undefined;
+    if (isPrimary) {
+      const rdsSg = new ec2.SecurityGroup(this, 'RdsSg', {
+        vpc,
+        description: 'RDS Postgres - accept from ECS API',
+        allowAllOutbound: false,
+      });
+      rdsSg.addIngressRule(apiSg, ec2.Port.tcp(5432), 'Allow Postgres from ECS API');
 
-    // ── RDS Postgres ─────────────────────────────────────────────────────────
-    const database = new rds.DatabaseInstance(this, 'Database', {
-      engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.VER_16 }),
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
-      credentials: rds.Credentials.fromGeneratedSecret('postgres', { secretName: '/vexillo/rds-credentials' }),
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [rdsSg],
-      databaseName: 'vexillo',
-      multiAz: false,
-      storageEncrypted: true,
-      deletionProtection: false,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      backupRetention: cdk.Duration.days(7),
-    });
+      database = new rds.DatabaseInstance(this, 'Database', {
+        engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.VER_16 }),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
+        credentials: rds.Credentials.fromGeneratedSecret('postgres', { secretName: '/vexillo/rds-credentials' }),
+        vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        securityGroups: [rdsSg],
+        databaseName: 'vexillo',
+        multiAz: false,
+        storageEncrypted: true,
+        deletionProtection: false,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+        backupRetention: cdk.Duration.days(7),
+      });
+    }
 
     // ── ECR repository ────────────────────────────────────────────────────────
     const repository = new ecr.Repository(this, 'ApiRepository', {
@@ -131,13 +163,14 @@ export class VexilloStack extends cdk.Stack {
     databaseUrlParam.grantRead(executionRole);
     betterAuthSecretParam.grantRead(executionRole);
     oktaSecretKeyParam.grantRead(executionRole);
+    internalSecretParam.grantRead(executionRole);
 
     // ── Task role (runtime: Secrets Manager for RDS credentials) ─────────────
     const taskRole = new iam.Role(this, 'TaskRole', {
       roleName: 'vexillo-ecs-task-role',
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
-    database.secret?.grantRead(taskRole);
+    database?.secret?.grantRead(taskRole);
     // Required for ECS Exec (aws ecs execute-command)
     taskRole.addManagedPolicy(
       iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
@@ -180,6 +213,12 @@ export class VexilloStack extends cdk.Stack {
           BETTER_AUTH_TRUSTED_ORIGINS: ecs.Secret.fromSsmParameter(ssmParams['/vexillo/BETTER_AUTH_TRUSTED_ORIGINS']),
           SUPER_ADMIN_EMAILS:          ecs.Secret.fromSsmParameter(ssmParams['/vexillo/SUPER_ADMIN_EMAILS']),
           OKTA_SECRET_KEY:             ecs.Secret.fromSsmParameter(oktaSecretKeyParam),
+          // Shared cross-region secret: primary uses it to sign outbound POSTs;
+          // secondary uses it to verify inbound /internal/flag-change requests.
+          INTERNAL_SECRET:             ecs.Secret.fromSsmParameter(internalSecretParam),
+          // Comma-separated ALB base URLs of secondary regions. Set by the operator
+          // after deploying each secondary stack. Leave as placeholder in secondaries.
+          SECONDARY_REGION_URLS:       ecs.Secret.fromSsmParameter(ssmParams['/vexillo/SECONDARY_REGION_URLS']),
         },
       },
     });
@@ -412,10 +451,12 @@ export class VexilloStack extends cdk.Stack {
       value: distribution.distributionId,
       exportName: 'VexilloCloudFrontDistributionId',
     });
-    new cdk.CfnOutput(this, 'RdsEndpoint', {
-      description: 'RDS endpoint - used by setup-secrets.sh to build DATABASE_URL',
-      value: database.dbInstanceEndpointAddress,
-      exportName: 'VexilloRdsEndpoint',
-    });
+    if (database) {
+      new cdk.CfnOutput(this, 'RdsEndpoint', {
+        description: 'RDS endpoint - used by setup-secrets.sh to build DATABASE_URL',
+        value: database.dbInstanceEndpointAddress,
+        exportName: 'VexilloRdsEndpoint',
+      });
+    }
   }
 }
