@@ -1,4 +1,4 @@
-# REST vs. Streaming
+# REST vs. Hybrid
 
 > Scale context: ~1M visits/month, e-commerce storefront.
 
@@ -31,7 +31,7 @@ The REST prefetch is intentional, not a cost concern — it's CDN-cached and cos
 | Flag freshness (multi-region) | Up to ~6 min (CloudFront TTL unaffected by fan-out) | <5 s on streaming pages |
 | CDN-cacheable | Yes | Yes (REST prefetch + REST-only pages) |
 | Persistent connections | None | Only for streaming pages — a fraction of total traffic |
-| Redis required | No | Yes (but sized for streaming subset only) |
+| Redis required | No | Optional — recommended for multi-task SSE fan-out; sized for streaming subset only |
 | Secondary DB required (multi-region) | Yes | No — streaming pages keep snapshotCache warm via fan-out |
 | Est. AWS cost/month (single-region) | ~$12–25 | ~$25–55 |
 | Est. AWS cost/month (two regions) | ~$55–115 | ~$50–105 |
