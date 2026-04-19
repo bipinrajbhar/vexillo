@@ -6,12 +6,14 @@ import { createSdkRouter, SDK_OPENAPI_CONFIG } from './routes/sdk';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
+import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
 import { createDashboardService } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
 import { createStreamRegistry } from './lib/stream-registry';
 import { createAuthCache } from './lib/auth-cache';
 import { createSnapshotCache } from './lib/snapshot-cache';
+import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -33,16 +35,30 @@ const redisClients = REDIS_URL ? createRedisClients(REDIS_URL) : undefined;
 // subscriber is only needed for cross-container fan-out.
 const streamRegistry = createStreamRegistry(redisClients?.subscriber);
 
+// Cross-region fan-out: when SECONDARY_REGION_URLS is set, flag changes are
+// POSTed to each secondary region's /internal/flag-change endpoint. Fire-and-
+// forget — a failure logs a warning but does not block the primary's response.
+// If INTERNAL_SECRET is not configured a random value is used at startup so the
+// endpoint is locked even without an explicit secret.
+const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? crypto.randomUUID();
+const regionFanout = createRegionFanout(
+  parseSecondaryUrls(process.env.SECONDARY_REGION_URLS),
+  INTERNAL_SECRET,
+);
+
 // With Redis: publish to the channel so all containers' subscribers pick it up.
 // Without Redis: broadcast directly into the local registry.
-// Either way, update the snapshot cache so the next SSE connect skips the DB.
+// Either way, update the snapshot cache so the next SSE connect skips the DB,
+// and fan out to secondary regions.
 const notifyFlagChange = redisClients
   ? (envId: string, payload: string) => {
       snapshotCache.set(envId, payload);
+      regionFanout(envId, payload);
       return redisClients.publisher.publish(`flags:env:${envId}`, payload);
     }
   : (envId: string, payload: string) => {
       snapshotCache.set(envId, payload);
+      regionFanout(envId, payload);
       return streamRegistry.broadcast(envId, payload);
     };
 
@@ -109,6 +125,10 @@ app.route(
   '/api/superadmin',
   createSuperAdminRouter(db, (headers) => auth.api.getSession({ headers })),
 );
+
+// Internal cross-region propagation — not exposed via CloudFront; reachable
+// only via the ALB directly from the primary region's ECS tasks.
+app.route('/internal', createInternalRouter(snapshotCache, streamRegistry, redisClients?.publisher, INTERNAL_SECRET));
 
 const port = Number(process.env.PORT ?? 3000);
 

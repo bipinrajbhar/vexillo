@@ -35,6 +35,8 @@ Set required environment variables for `apps/api`:
 | `OKTA_SECRET_KEY` | 64-char hex string for encrypting Okta client secrets at rest — generate with `openssl rand -hex 32` |
 | `SUPER_ADMIN_EMAILS` | Comma-separated list of emails auto-promoted to super-admin on first sign-in |
 | `REDIS_URL` | _(Optional)_ Redis connection string — enables SSE fan-out across multiple API containers |
+| `INTERNAL_SECRET` | _(Optional)_ Shared secret for cross-region `/internal/flag-change` calls — must match in all regions. Generate with `openssl rand -hex 32`. If unset a random value is generated at startup, locking the endpoint. |
+| `SECONDARY_REGION_URLS` | _(Optional)_ Comma-separated ALB base URLs of secondary regions, e.g. `https://eu-alb.example.com`. Set only on the primary region. |
 
 Push the schema to your database:
 
@@ -91,6 +93,16 @@ Then:
 ## Deployment
 
 See [`infra/DEPLOY.md`](infra/DEPLOY.md) for deploying to AWS (CDK, ECS Fargate, RDS, CloudFront).
+
+### Multi-region (Phase 1)
+
+Deploy a second region by passing a context variable to CDK:
+
+```sh
+cdk deploy --context region=eu-west-1
+```
+
+The secondary stack omits RDS — its ECS tasks connect to the primary's RDS in us-east-1 via the same `DATABASE_URL`. Flag changes toggled on the primary are propagated to each secondary's `/internal/flag-change` endpoint in under 5 seconds. Set `SECONDARY_REGION_URLS` on the primary after deploying secondaries, and set the same `INTERNAL_SECRET` in SSM in every region.
 
 ## React SDK
 
