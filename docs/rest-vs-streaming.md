@@ -48,6 +48,7 @@ CloudFront caches responses per API key. At 1M visits/month, >95% of requests ar
 |---|---|
 | CloudFront (1M requests + ~10 GB transfer) | $2–5 |
 | ECS (one small task covers origin load) | $10–20 |
+| **Total** | **~$12–25** |
 
 ### Hybrid (~$25–55/month, single region)
 
@@ -58,6 +59,7 @@ REST handles the bulk of traffic cheaply through CloudFront. Streaming is only e
 | CloudFront (REST majority) | $2–5 |
 | ECS (sized for mixed load) | $15–30 |
 | ElastiCache Redis (sized for streaming subset) | $8–20 |
+| **Total** | **~$25–55** |
 
 ---
 
@@ -73,6 +75,7 @@ Fan-out propagates snapshots to the secondary's in-memory cache, but CloudFront'
 | RDS in secondary region | $15–30 |
 | Cross-region data transfer | $5–10 |
 | Fan-out infra | <$5 |
+| **Total** | **~$55–115** |
 
 > Without a secondary DB, REST cache misses in eu-west-1 fall through to RDS in us-east-1 (~80–100 ms). Acceptable for low-traffic paths; noticeable at scale.
 
@@ -85,6 +88,7 @@ The streaming subset keeps `snapshotCache` warm in the secondary via fan-out, el
 | Hybrid costs × 2 regions | $50–110 |
 | Secondary DB | $0 — streaming keeps cache warm |
 | Cross-region data transfer | <$5 |
+| **Total** | **~$50–105** |
 
 **The hybrid at two regions costs less than pure REST** once you account for the secondary database, while giving you real-time updates where they matter.
 
