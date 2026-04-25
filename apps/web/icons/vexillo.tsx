@@ -1,15 +1,17 @@
-export function VexilloMark({ className }: { className?: string }) {
+import type { SVGProps } from 'react'
+
+export function VexilloMark(props: SVGProps<SVGSVGElement>) {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none" aria-label="Vexillo" className={className}>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="10 6 62 84" fill="none" aria-label="Vexillo" {...props}>
       <rect x="12" y="8" width="3" height="80" fill="currentColor" />
       <path d="M15 18 L70 18 L52 44 L70 70 L15 70 L15 60 L52 60 L40 44 L52 28 L15 28 Z" fill="currentColor" />
     </svg>
   )
 }
 
-export function VexilloLockup({ className }: { className?: string }) {
+export function VexilloLockup(props: SVGProps<SVGSVGElement>) {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120" fill="none" aria-label="Vexillo" className={className}>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120" fill="none" aria-label="Vexillo" {...props}>
       <g transform="translate(28, 18)">
         <rect x="12" y="8" width="3" height="80" fill="currentColor" />
         <path d="M15 18 L70 18 L52 44 L70 70 L15 70 L15 60 L52 60 L40 44 L52 28 L15 28 Z" fill="currentColor" />

@@ -26,12 +26,7 @@ export function WorkspacePage() {
       <div className="flex flex-1 flex-col items-center justify-center px-5 py-16 sm:px-8">
         <div className="flex w-full max-w-[420px] flex-col items-center">
           {/* Logo */}
-          <div className="page-enter mb-5 overflow-hidden" style={{ width: 40, height: 40 }}>
-            <VexilloMark
-              className="text-foreground"
-              style={{ width: 64, height: 64, marginLeft: -10, marginTop: -5 }}
-            />
-          </div>
+          <VexilloMark className="page-enter mb-5 h-10 w-auto text-foreground" />
 
           {/* Heading */}
           <h1 className="page-enter page-enter-delay-1 mb-6 font-heading text-2xl font-semibold tracking-[-0.02em] text-foreground">

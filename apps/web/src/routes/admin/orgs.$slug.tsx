@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { Link, useParams, useNavigate } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
@@ -30,17 +31,6 @@ interface OrgDetail {
   memberCount: number
 }
 
-interface OrgPatch {
-  id: string
-  name: string
-  slug: string
-  status: string
-  oktaClientId: string
-  oktaClientSecret: string
-  oktaIssuer: string
-  createdAt: string
-}
-
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 async function fetchOrg(slug: string): Promise<OrgDetail> {
@@ -53,10 +43,7 @@ async function fetchOrg(slug: string): Promise<OrgDetail> {
   return data.org
 }
 
-async function patchOrg(
-  slug: string,
-  body: Record<string, string>,
-): Promise<OrgPatch> {
+async function patchOrg(slug: string, body: Record<string, string>): Promise<OrgDetail> {
   const res = await fetch(`/api/superadmin/orgs/${encodeURIComponent(slug)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -68,30 +55,21 @@ async function patchOrg(
 }
 
 async function suspendOrg(slug: string): Promise<string> {
-  const res = await fetch(
-    `/api/superadmin/orgs/${encodeURIComponent(slug)}/suspend`,
-    { method: 'POST' },
-  )
+  const res = await fetch(`/api/superadmin/orgs/${encodeURIComponent(slug)}/suspend`, { method: 'POST' })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error ?? 'Failed to suspend organization')
   return data.status
 }
 
 async function unsuspendOrg(slug: string): Promise<string> {
-  const res = await fetch(
-    `/api/superadmin/orgs/${encodeURIComponent(slug)}/unsuspend`,
-    { method: 'POST' },
-  )
+  const res = await fetch(`/api/superadmin/orgs/${encodeURIComponent(slug)}/unsuspend`, { method: 'POST' })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error ?? 'Failed to unsuspend organization')
   return data.status
 }
 
 async function deleteOrg(slug: string): Promise<void> {
-  const res = await fetch(
-    `/api/superadmin/orgs/${encodeURIComponent(slug)}`,
-    { method: 'DELETE' },
-  )
+  const res = await fetch(`/api/superadmin/orgs/${encodeURIComponent(slug)}`, { method: 'DELETE' })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.error ?? 'Failed to delete organization')
@@ -103,112 +81,91 @@ async function deleteOrg(slug: string): Promise<void> {
 export function AdminOrgDetailPage() {
   const { slug, orgSlug } = useParams({ strict: false }) as { slug: string; orgSlug: string }
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
-  const [org, setOrg] = useState<OrgDetail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  // Form fields
+  // Form fields — synced from query data on first load
   const [name, setName] = useState('')
   const [editSlug, setEditSlug] = useState('')
   const [oktaClientId, setOktaClientId] = useState('')
   const [oktaClientSecret, setOktaClientSecret] = useState('')
   const [oktaIssuer, setOktaIssuer] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  const [suspending, setSuspending] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleting, setDeleting] = useState(false)
 
-  const load = useCallback(async () => {
-    try {
-      setError(null)
-      const result = await fetchOrg(orgSlug)
-      setOrg(result)
-      setName(result.name)
-      setEditSlug(result.slug)
-      setOktaClientId(result.oktaClientId)
-      setOktaClientSecret(result.oktaClientSecret)
-      setOktaIssuer(result.oktaIssuer)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load organization')
-    } finally {
-      setLoading(false)
-    }
-  }, [orgSlug])
+  const { data: org, isLoading, error } = useQuery({
+    queryKey: ['superadmin-org', orgSlug],
+    queryFn: () => fetchOrg(orgSlug),
+  })
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (org) {
+      setName(org.name)
+      setEditSlug(org.slug)
+      setOktaClientId(org.oktaClientId)
+      setOktaClientSecret(org.oktaClientSecret)
+      setOktaIssuer(org.oktaIssuer)
+    }
+  }, [org])
 
-  async function handleSave(e: FormEvent) {
-    e.preventDefault()
-    if (!org) return
-    setSaving(true)
-    try {
-      const updated = await patchOrg(orgSlug, {
-        name: name.trim(),
-        slug: editSlug.trim(),
-        oktaClientId: oktaClientId.trim(),
-        oktaClientSecret: oktaClientSecret.trim(),
-        oktaIssuer: oktaIssuer.trim(),
-      })
-      setOrg((prev) => (prev ? { ...prev, ...updated } : prev))
+  const saveMutation = useMutation({
+    mutationFn: (body: Record<string, string>) => patchOrg(orgSlug, body),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['superadmin-org', updated.slug], updated)
+      queryClient.invalidateQueries({ queryKey: ['superadmin-orgs'] })
       toast.success('Organization updated')
       if (updated.slug !== orgSlug) {
         navigate({ to: '/org/$slug/admin/orgs/$orgSlug', params: { slug, orgSlug: updated.slug } })
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update organization')
-    } finally {
-      setSaving(false)
-    }
-  }
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to update organization'),
+  })
 
-  async function handleSuspend() {
-    if (!org) return
-    setSuspending(true)
-    try {
-      const status = await suspendOrg(orgSlug)
-      setOrg((prev) => (prev ? { ...prev, status } : prev))
+  const suspendMutation = useMutation({
+    mutationFn: () => suspendOrg(orgSlug),
+    onSuccess: (status) => {
+      queryClient.setQueryData<OrgDetail>(['superadmin-org', orgSlug], (old) =>
+        old ? { ...old, status } : old,
+      )
       toast.success('Organization suspended')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to suspend')
-    } finally {
-      setSuspending(false)
-    }
-  }
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to suspend'),
+  })
 
-  async function handleUnsuspend() {
-    if (!org) return
-    setSuspending(true)
-    try {
-      const status = await unsuspendOrg(orgSlug)
-      setOrg((prev) => (prev ? { ...prev, status } : prev))
+  const unsuspendMutation = useMutation({
+    mutationFn: () => unsuspendOrg(orgSlug),
+    onSuccess: (status) => {
+      queryClient.setQueryData<OrgDetail>(['superadmin-org', orgSlug], (old) =>
+        old ? { ...old, status } : old,
+      )
       toast.success('Organization unsuspended')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to unsuspend')
-    } finally {
-      setSuspending(false)
-    }
-  }
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to unsuspend'),
+  })
 
-  async function handleDelete() {
-    if (!org) return
-    setDeleting(true)
-    try {
-      await deleteOrg(orgSlug)
-      toast.success(`"${org.name}" deleted`)
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteOrg(orgSlug),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['superadmin-orgs'] })
+      toast.success(`"${org?.name}" deleted`)
       navigate({ to: '/org/$slug/admin', params: { slug } })
-    } catch (err) {
+    },
+    onError: (err) => {
       toast.error(err instanceof Error ? err.message : 'Failed to delete organization')
-      setDeleting(false)
-    }
+      setDeleteOpen(false)
+    },
+  })
+
+  function handleSave(e: FormEvent) {
+    e.preventDefault()
+    saveMutation.mutate({
+      name: name.trim(),
+      slug: editSlug.trim(),
+      oktaClientId: oktaClientId.trim(),
+      oktaClientSecret: oktaClientSecret.trim(),
+      oktaIssuer: oktaIssuer.trim(),
+    })
   }
 
-  if (loading) {
-    return null
-  }
+  if (isLoading) return null
 
   if (error || !org) {
     return (
@@ -218,16 +175,13 @@ export function AdminOrgDetailPage() {
             <p className="page-eyebrow mb-1.5">Directory</p>
             <h1 className="page-title">Organization</h1>
             <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-              We couldn’t load this tenant.
+              We couldn't load this tenant.
             </p>
           </div>
           <Link
             to="/org/$slug/admin"
             params={{ slug }}
-            className={cn(
-              buttonVariants({ variant: 'outline', size: 'default' }),
-              'gap-2 shadow-surface-xs',
-            )}
+            className={cn(buttonVariants({ variant: 'outline', size: 'default' }), 'gap-2 shadow-surface-xs')}
           >
             <ArrowLeft className="h-4 w-4" />
             Back to organizations
@@ -237,7 +191,7 @@ export function AdminOrgDetailPage() {
           className="mb-8 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           role="alert"
         >
-          {error ?? 'Organization not found'}
+          {error instanceof Error ? error.message : 'Organization not found'}
         </div>
       </div>
     )
@@ -268,10 +222,7 @@ export function AdminOrgDetailPage() {
         <Link
           to="/org/$slug/admin"
           params={{ slug }}
-          className={cn(
-            buttonVariants({ variant: 'outline', size: 'default' }),
-            'gap-2 shadow-surface-xs',
-          )}
+          className={cn(buttonVariants({ variant: 'outline', size: 'default' }), 'gap-2 shadow-surface-xs')}
         >
           <ArrowLeft className="h-4 w-4" />
           Back to organizations
@@ -287,14 +238,8 @@ export function AdminOrgDetailPage() {
             <div className="space-y-4 px-5 py-5 sm:px-6">
               <div className="space-y-1.5">
                 <Label htmlFor="org-name">Name</Label>
-                <Input
-                  id="org-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                />
+                <Input id="org-name" value={name} onChange={(e) => setName(e.target.value)} required />
               </div>
-
               <div className="space-y-1.5">
                 <Label htmlFor="org-slug">Slug</Label>
                 <Input
@@ -324,7 +269,6 @@ export function AdminOrgDetailPage() {
                   required
                 />
               </div>
-
               <div className="space-y-1.5">
                 <Label htmlFor="okta-client-secret">Client Secret</Label>
                 <Input
@@ -336,7 +280,6 @@ export function AdminOrgDetailPage() {
                   autoComplete="off"
                 />
               </div>
-
               <div className="space-y-1.5">
                 <Label htmlFor="okta-issuer">Issuer URL</Label>
                 <Input
@@ -351,12 +294,8 @@ export function AdminOrgDetailPage() {
           </div>
 
           <div>
-            <Button
-              type="submit"
-              disabled={saving}
-              className="shadow-surface-xs"
-            >
-              {saving ? 'Saving…' : 'Save changes'}
+            <Button type="submit" disabled={saveMutation.isPending} className="shadow-surface-xs">
+              {saveMutation.isPending ? 'Saving…' : 'Save changes'}
             </Button>
           </div>
         </form>
@@ -368,9 +307,7 @@ export function AdminOrgDetailPage() {
           <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div>
               <p className="text-sm font-medium text-foreground">
-                {org.status === 'suspended'
-                  ? 'Unsuspend organization'
-                  : 'Suspend organization'}
+                {org.status === 'suspended' ? 'Unsuspend organization' : 'Suspend organization'}
               </p>
               <p className="mt-0.5 text-[0.75rem] text-muted-foreground">
                 {org.status === 'suspended'
@@ -381,11 +318,11 @@ export function AdminOrgDetailPage() {
             <Button
               variant={org.status === 'suspended' ? 'default' : 'outline'}
               size="sm"
-              onClick={org.status === 'suspended' ? handleUnsuspend : handleSuspend}
-              disabled={suspending}
+              onClick={() => org.status === 'suspended' ? unsuspendMutation.mutate() : suspendMutation.mutate()}
+              disabled={suspendMutation.isPending || unsuspendMutation.isPending}
               className="shrink-0"
             >
-              {suspending
+              {suspendMutation.isPending || unsuspendMutation.isPending
                 ? '…'
                 : org.status === 'suspended'
                   ? 'Unsuspend'
@@ -397,18 +334,13 @@ export function AdminOrgDetailPage() {
         {orgSlug !== slug && (
           <div className="table-shell overflow-hidden">
             <div className="border-b border-border bg-muted/45 px-5 py-3 dark:bg-muted/15">
-              <span className={cn('data-table-th', 'text-destructive')}>
-                Danger zone
-              </span>
+              <span className={cn('data-table-th', 'text-destructive')}>Danger zone</span>
             </div>
             <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div>
-                <p className="text-sm font-medium text-foreground">
-                  Delete this organization
-                </p>
+                <p className="text-sm font-medium text-foreground">Delete this organization</p>
                 <p className="mt-0.5 text-[0.75rem] text-muted-foreground">
-                  Permanently removes the organization, all flags, environments,
-                  and members. This cannot be undone.
+                  Permanently removes the organization, all flags, environments, and members. This cannot be undone.
                 </p>
               </div>
               <Button
@@ -424,12 +356,7 @@ export function AdminOrgDetailPage() {
         )}
       </div>
 
-      <Dialog
-        open={deleteOpen}
-        onOpenChange={(v) => {
-          if (!deleting) setDeleteOpen(v)
-        }}
-      >
+      <Dialog open={deleteOpen} onOpenChange={(v) => { if (!deleteMutation.isPending) setDeleteOpen(v) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete organization?</DialogTitle>
@@ -438,19 +365,11 @@ export function AdminOrgDetailPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteOpen(false)}
-              disabled={deleting}
-            >
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleteMutation.isPending}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleting}
-            >
-              {deleting ? 'Deleting…' : 'Delete organization'}
+            <Button variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting…' : 'Delete organization'}
             </Button>
           </DialogFooter>
         </DialogContent>

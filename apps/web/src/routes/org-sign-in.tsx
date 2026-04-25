@@ -1,44 +1,43 @@
-import { useEffect, useState } from 'react'
 import { useParams, useSearch } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { ModeToggle } from '@/components/mode-toggle'
 import { VexilloMark } from '@/icons/vexillo'
 
 type OrgMeta = { name: string; slug: string; status: string }
-type State =
-  | { phase: 'loading' }
+type OrgState =
   | { phase: 'ready'; org: OrgMeta }
   | { phase: 'not-found' }
   | { phase: 'suspended' }
 
+async function fetchOrgMeta(slug: string): Promise<OrgState> {
+  const res = await fetch(`/api/auth/org-oauth/${encodeURIComponent(slug)}/meta`)
+  if (res.status === 404) return { phase: 'not-found' }
+  if (!res.ok) throw new Error(`${res.status}`)
+  const data = await res.json() as { org: OrgMeta }
+  if (data.org.status === 'suspended') return { phase: 'suspended' }
+  return { phase: 'ready', org: data.org }
+}
+
 export function OrgSignInPage() {
   const { slug } = useParams({ strict: false }) as { slug: string }
   const search = useSearch({ strict: false }) as { next?: string }
-  const [state, setState] = useState<State>({ phase: 'loading' })
 
-  useEffect(() => {
-    if (!slug) {
-      setState({ phase: 'not-found' })
-      return
-    }
-    fetch(`/api/auth/org-oauth/${encodeURIComponent(slug)}/meta`)
-      .then(async (res) => {
-        if (res.status === 404) { setState({ phase: 'not-found' }); return }
-        if (!res.ok) throw new Error(`${res.status}`)
-        const data = await res.json() as { org: OrgMeta }
-        if (data.org.status === 'suspended') { setState({ phase: 'suspended' }); return }
-        setState({ phase: 'ready', org: data.org })
-      })
-      .catch(() => setState({ phase: 'not-found' }))
-  }, [slug])
+  const { data, isPending } = useQuery({
+    queryKey: ['org-meta', slug],
+    queryFn: () => fetchOrgMeta(slug),
+    enabled: !!slug,
+    retry: false,
+  })
+
+  const state: OrgState = !slug ? { phase: 'not-found' } : (data ?? { phase: 'not-found' })
 
   function handleSignIn() {
     const next = search.next ?? `/org/${slug}/flags`
-    const authorizeUrl =
+    window.location.href =
       `/api/auth/org-oauth/${encodeURIComponent(slug)}/authorize` +
       `?next=${encodeURIComponent(next)}`
-    window.location.href = authorizeUrl
   }
 
   return (
@@ -48,22 +47,15 @@ export function OrgSignInPage() {
       </div>
 
       <div className="flex flex-1 flex-col items-center justify-center px-5 py-16 sm:px-8">
-        {state.phase === 'loading' ? (
+        {isPending ? (
           <div className="page-enter flex flex-col items-center gap-3">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground">Loading workspace…</p>
           </div>
         ) : (
           <div className="page-enter flex w-full max-w-[420px] flex-col items-center">
-            {/* Logo — above card */}
-            <div className="mb-5 overflow-hidden" style={{ width: 40, height: 40 }}>
-              <VexilloMark
-                className="text-foreground"
-                style={{ width: 64, height: 64, marginLeft: -10, marginTop: -5 }}
-              />
-            </div>
+            <VexilloMark className="mb-5 h-10 w-auto text-foreground" />
 
-            {/* Heading — above card */}
             <h1 className="page-enter-delay-1 mb-6 font-heading text-2xl font-semibold tracking-[-0.02em] text-foreground">
               {state.phase === 'ready' && `Sign in to ${state.org.name}`}
               {state.phase === 'not-found' && 'Workspace not found'}

@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate, useParams } from '@tanstack/react-router'
 import { Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { AdminNewOrgDialog } from '@/components/admin-new-org-dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -48,30 +49,16 @@ async function deleteOrg(slug: string): Promise<void> {
 function DeleteOrgDialog({
   org,
   onClose,
-  onDeleted,
+  onConfirm,
+  isDeleting,
 }: {
   org: OrgRow
   onClose: () => void
-  onDeleted: (slug: string) => void
+  onConfirm: () => void
+  isDeleting: boolean
 }) {
-  const [deleting, setDeleting] = useState(false)
-
-  async function handleDelete() {
-    setDeleting(true)
-    try {
-      await deleteOrg(org.slug)
-      onDeleted(org.slug)
-      onClose()
-      toast.success(`"${org.name}" deleted`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete')
-    } finally {
-      setDeleting(false)
-    }
-  }
-
   return (
-    <Dialog open onOpenChange={() => !deleting && onClose()}>
+    <Dialog open onOpenChange={() => !isDeleting && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Delete organization?</DialogTitle>
@@ -80,11 +67,11 @@ function DeleteOrgDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={deleting}>
+          <Button variant="outline" onClick={onClose} disabled={isDeleting}>
             Cancel
           </Button>
-          <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-            {deleting ? 'Deleting…' : 'Delete organization'}
+          <Button variant="destructive" onClick={onConfirm} disabled={isDeleting}>
+            {isDeleting ? 'Deleting…' : 'Delete organization'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -98,27 +85,27 @@ export function AdminOrgsPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { slug } = useParams({ strict: false }) as { slug: string }
-  const [orgs, setOrgs] = useState<OrgRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
   const [deleteTarget, setDeleteTarget] = useState<OrgRow | null>(null)
   const [newOrgOpen, setNewOrgOpen] = useState(false)
 
-  const load = useCallback(async () => {
-    try {
-      setError(null)
-      const result = await fetchOrgs()
-      setOrgs(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load organizations')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const { data: orgs = [], isLoading, error } = useQuery({
+    queryKey: ['superadmin-orgs'],
+    queryFn: fetchOrgs,
+  })
 
-  useEffect(() => {
-    load()
-  }, [load])
+  const deleteMutation = useMutation({
+    mutationFn: (orgSlug: string) => deleteOrg(orgSlug),
+    onSuccess: (_, orgSlug) => {
+      queryClient.setQueryData<OrgRow[]>(['superadmin-orgs'], (old = []) =>
+        old.filter((o) => o.slug !== orgSlug),
+      )
+      toast.success(`"${deleteTarget?.name}" deleted`)
+      setDeleteTarget(null)
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete'),
+  })
 
   useEffect(() => {
     const q = new URLSearchParams(location.search)
@@ -127,11 +114,7 @@ export function AdminOrgsPage() {
       setNewOrgOpen(true)
       navigate({ to: '/org/$slug/admin', params: { slug }, replace: true })
     }
-  }, [location.search, navigate])
-
-  function handleDeleted(slug: string) {
-    setOrgs((prev) => prev.filter((o) => o.slug !== slug))
-  }
+  }, [location.search, navigate, slug])
 
   return (
     <div className="page-container page-container-wide page-enter">
@@ -158,16 +141,14 @@ export function AdminOrgsPage() {
           className="mb-8 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           role="alert"
         >
-          {error}
+          {error instanceof Error ? error.message : 'Failed to load organizations'}
         </div>
       )}
 
       {/* Empty state */}
-      {!loading && !error && orgs.length === 0 && (
+      {!isLoading && !error && orgs.length === 0 && (
         <div className="surface-card flex flex-col items-center justify-center px-6 py-16 text-center shadow-surface">
-          <p className="mb-1 text-base font-medium text-foreground">
-            No organizations yet
-          </p>
+          <p className="mb-1 text-base font-medium text-foreground">No organizations yet</p>
           <p className="mb-8 max-w-sm text-sm text-muted-foreground">
             Create an organization to onboard your first tenant and configure Okta.
           </p>
@@ -179,7 +160,7 @@ export function AdminOrgsPage() {
       )}
 
       {/* List */}
-      {!loading && !error && orgs.length > 0 && (
+      {!isLoading && !error && orgs.length > 0 && (
         <div className="table-shell overflow-hidden">
           <div className="hidden grid-cols-[1fr_6.5rem_7.5rem_2.5rem] gap-4 border-b border-border bg-muted/45 px-5 py-3 sm:grid dark:bg-muted/15">
             <span className="data-table-th">Organization</span>
@@ -201,16 +182,12 @@ export function AdminOrgsPage() {
                 >
                   {org.name}
                 </Link>
-                <p className="data-table-mono-meta mt-0.5 text-[0.8125rem]">
-                  {org.slug}
-                </p>
+                <p className="data-table-mono-meta mt-0.5 text-[0.8125rem]">{org.slug}</p>
               </div>
 
               <div className="hidden sm:flex sm:items-center">
                 <Badge
-                  variant={
-                    org.status === 'suspended' ? 'destructive' : 'secondary'
-                  }
+                  variant={org.status === 'suspended' ? 'destructive' : 'secondary'}
                   className="h-6 px-2 text-[0.6875rem] font-medium capitalize"
                 >
                   {org.status}
@@ -237,9 +214,7 @@ export function AdminOrgsPage() {
 
               <div className="col-span-2 flex flex-wrap items-center gap-2 sm:hidden">
                 <Badge
-                  variant={
-                    org.status === 'suspended' ? 'destructive' : 'secondary'
-                  }
+                  variant={org.status === 'suspended' ? 'destructive' : 'secondary'}
                   className="h-6 px-2 text-[0.6875rem] font-medium capitalize"
                 >
                   {org.status}
@@ -257,7 +232,8 @@ export function AdminOrgsPage() {
         <DeleteOrgDialog
           org={deleteTarget}
           onClose={() => setDeleteTarget(null)}
-          onDeleted={handleDeleted}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.slug)}
+          isDeleting={deleteMutation.isPending}
         />
       )}
 
