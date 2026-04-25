@@ -222,15 +222,17 @@ export function AdminOrgsPage() {
               </span>
 
               <div className="flex justify-end sm:justify-start">
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => setDeleteTarget(org)}
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                  aria-label={`Delete ${org.name}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                {org.slug !== slug && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => setDeleteTarget(org)}
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${org.name}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
 
               <div className="col-span-2 flex flex-wrap items-center gap-2 sm:hidden">

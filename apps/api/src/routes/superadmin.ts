@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc, count } from 'drizzle-orm';
+import { eq, desc, count, and, isNull } from 'drizzle-orm';
 import { organizations, organizationMembers, authUser } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import type { GetSession, Session } from '../lib/session';
@@ -159,11 +159,29 @@ export function createSuperAdminRouter(db: DbClient, getSession: GetSession) {
   // DELETE /api/superadmin/orgs/:slug — permanently delete org (cascades to all data)
   router.delete('/orgs/:slug', async (c) => {
     const slug = c.req.param('slug');
-    const result = await db
-      .delete(organizations)
+    const session = c.get('session');
+
+    const org = await db
+      .select({ id: organizations.id })
+      .from(organizations)
       .where(eq(organizations.slug, slug))
-      .returning({ id: organizations.id });
-    if (result.length === 0) return c.json({ error: 'Organization not found' }, 404);
+      .then((rows) => rows[0]);
+    if (!org) return c.json({ error: 'Organization not found' }, 404);
+
+    const ownMembership = await db
+      .select({ orgId: organizationMembers.orgId })
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.orgId, org.id),
+          eq(organizationMembers.userId, session.user.id),
+          isNull(organizationMembers.removedAt),
+        ),
+      )
+      .then((rows) => rows[0]);
+    if (ownMembership) return c.json({ error: 'Cannot delete your own organization' }, 403);
+
+    await db.delete(organizations).where(eq(organizations.id, org.id));
     return c.body(null, 204);
   });
 

@@ -394,32 +394,34 @@ export function AdminOrgDetailPage() {
           </div>
         </div>
 
-        <div className="table-shell overflow-hidden">
-          <div className="border-b border-border bg-muted/45 px-5 py-3 dark:bg-muted/15">
-            <span className={cn('data-table-th', 'text-destructive')}>
-              Danger zone
-            </span>
-          </div>
-          <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                Delete this organization
-              </p>
-              <p className="mt-0.5 text-[0.75rem] text-muted-foreground">
-                Permanently removes the organization, all flags, environments,
-                and members. This cannot be undone.
-              </p>
+        {orgSlug !== slug && (
+          <div className="table-shell overflow-hidden">
+            <div className="border-b border-border bg-muted/45 px-5 py-3 dark:bg-muted/15">
+              <span className={cn('data-table-th', 'text-destructive')}>
+                Danger zone
+              </span>
             </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setDeleteOpen(true)}
-              className="shrink-0"
-            >
-              Delete
-            </Button>
+            <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Delete this organization
+                </p>
+                <p className="mt-0.5 text-[0.75rem] text-muted-foreground">
+                  Permanently removes the organization, all flags, environments,
+                  and members. This cannot be undone.
+                </p>
+              </div>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setDeleteOpen(true)}
+                className="shrink-0"
+              >
+                Delete
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <Dialog

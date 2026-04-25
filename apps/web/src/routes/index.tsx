@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Flag } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ModeToggle } from '@/components/mode-toggle'
+import { VexilloMark } from '@/icons/vexillo'
 
 export function WorkspacePage() {
   const [slug, setSlug] = useState('')
@@ -18,44 +18,28 @@ export function WorkspacePage() {
   }
 
   return (
-    <div className="relative flex min-h-dvh flex-1 flex-col overflow-hidden">
-      {/* Subtle dot-grid background */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        aria-hidden
-        style={{
-          backgroundImage:
-            'radial-gradient(circle, var(--color-border) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
-          maskImage:
-            'radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 100%)',
-          WebkitMaskImage:
-            'radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 100%)',
-          opacity: 0.6,
-        }}
-      />
-
+    <div className="relative flex min-h-dvh flex-col bg-background">
       <div className="absolute end-4 top-4 z-10 sm:end-6 sm:top-6">
         <ModeToggle />
       </div>
 
-      <div className="relative flex flex-1 flex-col items-center justify-center px-5 pb-24 pt-16 sm:px-8">
-        <div className="w-full max-w-sm">
-          <div className="page-enter mb-8 flex flex-col items-center gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-card shadow-surface">
-              <Flag className="h-5 w-5 text-foreground" strokeWidth={1.75} />
-            </div>
-            <header className="text-center">
-              <h1 className="font-heading text-2xl font-normal tracking-[-0.02em] text-foreground sm:text-[1.75rem]">
-                Find your workspace
-              </h1>
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                Enter your organisation slug to continue
-              </p>
-            </header>
+      <div className="flex flex-1 flex-col items-center justify-center px-5 py-16 sm:px-8">
+        <div className="flex w-full max-w-[420px] flex-col items-center">
+          {/* Logo */}
+          <div className="page-enter mb-5 overflow-hidden" style={{ width: 40, height: 40 }}>
+            <VexilloMark
+              className="text-foreground"
+              style={{ width: 64, height: 64, marginLeft: -10, marginTop: -5 }}
+            />
           </div>
 
-          <form onSubmit={handleSubmit} className="page-enter page-enter-delay-1 space-y-4">
+          {/* Heading */}
+          <h1 className="page-enter page-enter-delay-1 mb-6 font-heading text-2xl font-semibold tracking-[-0.02em] text-foreground">
+            Find your workspace
+          </h1>
+
+          {/* Form */}
+          <form onSubmit={handleSubmit} className="page-enter page-enter-delay-2 w-full space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="org-slug">Workspace slug</Label>
               <Input
@@ -69,20 +53,15 @@ export function WorkspacePage() {
                 spellCheck={false}
               />
             </div>
-            <Button
-              type="submit"
-              className="h-10 w-full"
-              disabled={!slug.trim()}
-            >
+            <Button type="submit" className="h-10 w-full" disabled={!slug.trim()}>
               Continue
             </Button>
           </form>
-
         </div>
       </div>
 
-      <footer className="relative pb-6 text-center">
-        <p className="text-[0.6875rem] text-muted-foreground/50">
+      <footer className="pb-6 text-center">
+        <p className="text-[0.6875rem] text-muted-foreground/40">
           &copy; {new Date().getFullYear()} Vexillo
         </p>
       </footer>

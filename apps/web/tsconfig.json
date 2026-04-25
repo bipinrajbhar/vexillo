@@ -12,6 +12,7 @@
     "src",
     "components",
     "hooks",
+    "icons",
     "lib/auth-client.ts",
     "lib/utils.ts",
     "vite.config.ts"

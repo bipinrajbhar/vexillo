@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams, useSearch } from '@tanstack/react-router'
-import { Flag, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ModeToggle } from '@/components/mode-toggle'
+import { VexilloMark } from '@/icons/vexillo'
 
 type OrgMeta = { name: string; slug: string; status: string }
 type State =
@@ -41,100 +42,81 @@ export function OrgSignInPage() {
   }
 
   return (
-    <div className="relative flex min-h-dvh flex-1 flex-col overflow-hidden">
-      {/* Dot-grid background */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        aria-hidden
-        style={{
-          backgroundImage:
-            'radial-gradient(circle, var(--color-border) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
-          maskImage:
-            'radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 100%)',
-          WebkitMaskImage:
-            'radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 100%)',
-          opacity: 0.6,
-        }}
-      />
-
+    <div className="relative flex min-h-dvh flex-col bg-background">
       <div className="absolute end-4 top-4 z-10 sm:end-6 sm:top-6">
         <ModeToggle />
       </div>
 
-      <div className="relative flex flex-1 flex-col items-center justify-center px-5 pb-24 pt-16 sm:px-8">
-        <div className="w-full max-w-sm">
-          {/* Logomark */}
-          <div className="page-enter mb-8 flex flex-col items-center gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-card shadow-surface">
-              <Flag className="h-5 w-5 text-foreground" strokeWidth={1.75} />
-            </div>
-
-            {state.phase === 'loading' && (
-              <div className="flex flex-col items-center gap-2">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">Loading workspace…</p>
-              </div>
-            )}
-
-            {state.phase === 'not-found' && (
-              <header className="text-center">
-                <h1 className="font-heading text-2xl font-normal tracking-[-0.02em] text-foreground sm:text-[1.75rem]">
-                  Workspace not found
-                </h1>
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  No workspace exists for <span className="font-mono">{slug}</span>.
-                </p>
-              </header>
-            )}
-
-            {state.phase === 'suspended' && (
-              <header className="text-center">
-                <h1 className="font-heading text-2xl font-normal tracking-[-0.02em] text-foreground sm:text-[1.75rem]">
-                  Workspace suspended
-                </h1>
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  This workspace is currently suspended. Contact your administrator.
-                </p>
-              </header>
-            )}
-
-            {state.phase === 'ready' && (
-              <header className="text-center">
-                <h1 className="font-heading text-2xl font-normal tracking-[-0.02em] text-foreground sm:text-[1.75rem]">
-                  Sign in to {state.org.name}
-                </h1>
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  Use your organisation's Okta account to continue.
-                </p>
-              </header>
-            )}
+      <div className="flex flex-1 flex-col items-center justify-center px-5 py-16 sm:px-8">
+        {state.phase === 'loading' ? (
+          <div className="page-enter flex flex-col items-center gap-3">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Loading workspace…</p>
           </div>
-
-          {state.phase === 'ready' && (
-            <div className="page-enter page-enter-delay-1">
-              <Button type="button" className="h-10 w-full" onClick={handleSignIn}>
-                Continue with Okta
-              </Button>
+        ) : (
+          <div className="page-enter flex w-full max-w-[420px] flex-col items-center">
+            {/* Logo — above card */}
+            <div className="mb-5 overflow-hidden" style={{ width: 40, height: 40 }}>
+              <VexilloMark
+                className="text-foreground"
+                style={{ width: 64, height: 64, marginLeft: -10, marginTop: -5 }}
+              />
             </div>
-          )}
 
-          {(state.phase === 'not-found' || state.phase === 'suspended') && (
-            <div className="page-enter page-enter-delay-1 text-center">
-              <a href="/" className="text-sm text-muted-foreground underline underline-offset-2">
-                Find a different workspace
-              </a>
+            {/* Heading — above card */}
+            <h1 className="page-enter-delay-1 mb-6 font-heading text-2xl font-semibold tracking-[-0.02em] text-foreground">
+              {state.phase === 'ready' && `Sign in to ${state.org.name}`}
+              {state.phase === 'not-found' && 'Workspace not found'}
+              {state.phase === 'suspended' && 'Workspace suspended'}
+            </h1>
+
+            <div className="page-enter-delay-2 w-full">
+              {state.phase === 'ready' && (
+                <>
+                  <Button type="button" className="h-10 w-full" onClick={handleSignIn}>
+                    Continue with Okta
+                  </Button>
+                  <p className="mt-5 text-center text-xs text-muted-foreground/50">
+                    By continuing, you agree to your organisation's SSO policy.
+                  </p>
+                </>
+              )}
+
+              {state.phase === 'not-found' && (
+                <>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
+                    No workspace exists for <span className="font-mono">{slug}</span>.
+                    Check the URL or contact your administrator.
+                  </p>
+                  <a
+                    href="/"
+                    className="mt-5 block text-center text-sm text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                  >
+                    Find a different workspace
+                  </a>
+                </>
+              )}
+
+              {state.phase === 'suspended' && (
+                <>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
+                    This workspace is currently suspended. Contact your administrator to restore access.
+                  </p>
+                  <a
+                    href="/"
+                    className="mt-5 block text-center text-sm text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                  >
+                    Find a different workspace
+                  </a>
+                </>
+              )}
             </div>
-          )}
-
-          <p className="page-enter page-enter-delay-2 mt-5 text-center text-xs text-muted-foreground/70">
-            By continuing, you agree to your organisation's SSO policy.
-          </p>
-        </div>
+          </div>
+        )}
       </div>
 
-      <footer className="relative pb-6 text-center">
-        <p className="text-[0.6875rem] text-muted-foreground/50">
+      <footer className="pb-6 text-center">
+        <p className="text-[0.6875rem] text-muted-foreground/40">
           &copy; {new Date().getFullYear()} Vexillo
         </p>
       </footer>
