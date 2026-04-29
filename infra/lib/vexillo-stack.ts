@@ -399,7 +399,7 @@ export class VexilloStack extends cdk.Stack {
           cachePolicy: sdkFlagsCachePolicy,
           originRequestPolicy: sdkOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          compress: false,
+          compress: true,
         },
         '/api/sdk/flags/stream': {
           origin: albOrigin,
@@ -407,7 +407,7 @@ export class VexilloStack extends cdk.Stack {
           cachePolicy: sdkStreamCachePolicy,
           originRequestPolicy: sdkOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          compress: false,
+          compress: false, // SSE stream — compression must stay off to avoid buffering
         },
         '/api/*': {
           origin: albOrigin,
@@ -415,7 +415,7 @@ export class VexilloStack extends cdk.Stack {
           cachePolicy: apiCachePolicy,
           originRequestPolicy: apiOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          compress: false,
+          compress: true,
         },
       },
       errorResponses: [
