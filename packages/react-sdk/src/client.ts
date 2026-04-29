@@ -238,6 +238,12 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
       if (!active) return;
       reconnectTimer = setTimeout(() => {
         backoffMs = Math.min(backoffMs * 2, 30_000);
+        // Fetch via REST while SSE reconnects so flags stay current during the
+        // gap. Resetting bootstrapped lets fetchRest() apply the result; if SSE
+        // reconnects first it sets bootstrapped=true and the REST response is
+        // ignored, preventing a stale overwrite.
+        bootstrapped = false;
+        void fetchRest();
         void attempt();
       }, backoffMs);
     }
