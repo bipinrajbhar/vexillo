@@ -62,7 +62,7 @@ Within `/api/dashboard/*`, most endpoints require an active org session. Role-sp
 
 - **All members (viewer + admin)** — read flags, environments, and members
 - **Admins** — manage flags, environments, API keys, view suspended members, and change member roles (cannot change super-admin roles)
-- **Super-admins** — suspend/restore members, manage orgs
+- **Super-admins** — suspend/restore members, manage orgs; cannot delete an org they are an active member of (returns 403)
 
 ## Caching
 
@@ -86,6 +86,37 @@ On a warm connection (same API key, at least one recent toggle) SSE stream conne
 | `GET /api/sdk/flags/stream` | `no-cache` | Not cached (TTL=0 stream policy) |
 
 > SDK clients using `connectStream()` fetch `GET /api/sdk/flags` first (CDN cache hit, typically < 50 ms) to populate flags immediately, then open the SSE connection for real-time updates. The SSE snapshot overwrites the cached REST response once the stream connects.
+
+## Flag change notification
+
+Every flag toggle flows through a single `NotifyFlagChange` callable assembled by `createFlagChangeNotifier` in `src/lib/flag-change-notifier.ts`. It owns three responsibilities in order:
+
+1. Write the new snapshot to `snapshotCache` (so the next SSE connect skips the DB).
+2. Fire a fire-and-forget POST to secondary regions via `regionFanout`.
+3. Deliver the snapshot to connected clients — via Redis pub/sub when `REDIS_URL` is set, or directly via `streamRegistry.broadcast` in single-container mode.
+
+```ts
+const notifyFlagChange = createFlagChangeNotifier({
+  snapshotCache,
+  regionFanout,
+  redisPublisher: redisClients?.publisher,   // multi-container path
+  streamRegistry: redisClients ? undefined : streamRegistry,  // single-container path
+});
+```
+
+The factory throws at startup if neither `redisPublisher` nor `streamRegistry` is supplied.
+
+**Testing.** Use `createTestFlagChangeNotifier` from `src/lib/flag-change-notifier.test-adapter.ts` instead of a bare `vi.fn()` when writing service tests. It records every call with structured access:
+
+```ts
+const notifier = createTestFlagChangeNotifier();
+const service = createDashboardService(db, notifier.notify);
+await service.toggleFlag(orgId, userId, 'feat-a', envId);
+
+expect(notifier.calls).toHaveLength(1);
+expect(notifier.lastCall()!.environmentId).toBe(envId);
+expect(notifier.lastCall()!.parsedPayload).toMatchObject({ flags: expect.any(Array) });
+```
 
 ## Multi-region propagation
 

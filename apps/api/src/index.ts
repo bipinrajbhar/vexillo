@@ -14,6 +14,7 @@ import { createStreamRegistry } from './lib/stream-registry';
 import { createAuthCache } from './lib/auth-cache';
 import { createSnapshotCache } from './lib/snapshot-cache';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
+import { createFlagChangeNotifier } from './lib/flag-change-notifier';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -50,17 +51,12 @@ const regionFanout = createRegionFanout(
 // Without Redis: broadcast directly into the local registry.
 // Either way, update the snapshot cache so the next SSE connect skips the DB,
 // and fan out to secondary regions.
-const notifyFlagChange = redisClients
-  ? (envId: string, payload: string) => {
-      snapshotCache.set(envId, payload);
-      regionFanout(envId, payload);
-      return redisClients.publisher.publish(`flags:env:${envId}`, payload);
-    }
-  : (envId: string, payload: string) => {
-      snapshotCache.set(envId, payload);
-      regionFanout(envId, payload);
-      return streamRegistry.broadcast(envId, payload);
-    };
+const notifyFlagChange = createFlagChangeNotifier({
+  snapshotCache,
+  regionFanout,
+  redisPublisher: redisClients?.publisher,
+  streamRegistry: redisClients ? undefined : streamRegistry,
+});
 
 const dashboardService = createDashboardService(db, notifyFlagChange, (environmentId) => authCache.deleteByEnvironmentId(environmentId));
 
