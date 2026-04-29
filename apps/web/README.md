@@ -46,7 +46,7 @@ Dashboard runs at `http://localhost:5173`.
 | `/org/:slug/members` | Org member | Members list (read-only for viewers, managed by admins) |
 | `/org/:slug/admin` | Super-admin | Org list |
 | `/org/:slug/admin/orgs/new` | Super-admin | Create an org |
-| `/org/:slug/admin/orgs/:orgSlug` | Super-admin | Org detail — edit Okta config, suspend/activate |
+| `/org/:slug/admin/orgs/:orgSlug` | Super-admin | Org detail — edit Okta config, suspend/activate; delete is hidden when the super-admin is an active member of that org |
 
 ## Tech stack
 
