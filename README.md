@@ -107,3 +107,8 @@ The secondary stack omits RDS — its ECS tasks connect to the primary's RDS in 
 ## React SDK
 
 See [`packages/react-sdk/README.md`](packages/react-sdk/README.md) for installation and usage.
+
+## Contributors
+
+<a href="https://github.com/bipinrajbhar"><img src="https://github.com/bipinrajbhar.png" width="48" height="48" alt="bipinrajbhar" title="bipinrajbhar" style="border-radius:50%" /></a>
+<a href="https://github.com/udisha-rbmsoft"><img src="https://github.com/udisha-rbmsoft.png" width="48" height="48" alt="udisha-rbmsoft" title="udisha-rbmsoft" style="border-radius:50%" /></a>
