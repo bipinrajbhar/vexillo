@@ -9,17 +9,17 @@
 
 | Service | Role |
 |---|---|
-| **CloudFront** | Global CDN. Serves the SPA and proxies all `/api/*` traffic to the ALB. Enforces HTTPS, applies security response headers (CSP, HSTS, X-Frame-Options), and caches the flag snapshot endpoint for 5 minutes. |
+| **CloudFront** | Global CDN. Serves the SPA and proxies all `/api/*` traffic to the ALB. Enforces HTTPS, applies security response headers (CSP, HSTS, X-Frame-Options), and caches the flag snapshot endpoint for 5 minutes. Restricted to `PriceClass_100` (US, Canada, Europe). |
 | **S3** | Hosts the compiled Vite SPA. Bucket is fully private; CloudFront accesses it via Origin Access Control (OAC). |
 | **Application Load Balancer** | Public-facing load balancer that routes HTTP traffic from CloudFront to the ECS Fargate tasks. |
-| **ECS Fargate** | Runs the Hono API as a containerized workload. Cluster: `vexillo`. Service: `vexillo-api`. Auto-scales 2–4 tasks based on CPU utilization (target 65%). No EC2 instances to manage. |
+| **ECS Fargate** | Runs the Hono API as a containerized workload. Cluster: `vexillo`. Service: `vexillo-api`. Auto-scales 2–4 tasks based on CPU utilization (target 65%). Uses a Spot mix — 1 on-demand task always running, remaining tasks on Fargate Spot (up to 70% cheaper). Container stop timeout is 120 s to allow SSE connections to drain on interruption. No EC2 instances to manage. |
 | **ECR** | Private Docker image registry (`vexillo-api`). CI/CD pushes images here on every merge to `main`. Lifecycle policy retains the last 10 images. |
 | **RDS (PostgreSQL 16)** | Primary datastore. Instance class `t4g.micro`, deployed in an isolated (no-internet) subnet. Storage encrypted at rest. Automated backups retained for 7 days. Provisioned in the primary region (`us-east-1`) only. |
 | **VPC** | Dedicated VPC spanning 2 Availability Zones. Public subnets for ECS tasks and ALB; isolated subnets for RDS. No NAT Gateway — ECS tasks reach ECR and SSM directly via public IPs and security groups. |
 | **SSM Parameter Store** | Stores all application configuration and secrets. Plain strings (URLs, allowed origins, admin emails) are `String` type; sensitive values (database URL, auth secret, API keys, cross-region shared secret) are `SecureString`. ECS injects these as environment variables at task startup. |
 | **Secrets Manager** | Holds the auto-generated RDS master credentials (`/vexillo/rds-credentials`). Used by ECS tasks at runtime to authenticate with the database. |
 | **IAM** | Two ECS roles: an *execution role* (pulls images from ECR, reads SSM parameters, writes CloudWatch logs) and a *task role* (reads RDS credentials from Secrets Manager at runtime). A separate `vexillo-deploy` IAM user with a minimal policy handles CI/CD. |
-| **CloudWatch Logs** | Captures all ECS container logs to log group `/vexillo/api`. Retention: 30 days. |
+| **CloudWatch Logs** | Captures all ECS container logs to log group `/vexillo/api`. Retention: 7 days. Only errors are logged — no per-request access logs. |
 | **CloudFormation** | CDK synthesizes and deploys all resources as a single stack (`VexilloStack`) per region. |
 
 ---

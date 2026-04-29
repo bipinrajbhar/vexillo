@@ -146,6 +146,7 @@ export class VexilloStack extends cdk.Stack {
     const cluster = new ecs.Cluster(this, 'Cluster', {
       vpc,
       clusterName: 'vexillo',
+      enableFargateCapacityProviders: true,
     });
 
     // ── Task execution role (pull image from ECR, read SSM, write logs) ───────
@@ -179,7 +180,7 @@ export class VexilloStack extends cdk.Stack {
     // ── CloudWatch log group ──────────────────────────────────────────────────
     const logGroup = new logs.LogGroup(this, 'ApiLogGroup', {
       logGroupName: '/vexillo/api',
-      retention: logs.RetentionDays.ONE_MONTH,
+      retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -197,6 +198,10 @@ export class VexilloStack extends cdk.Stack {
       publicLoadBalancer: true,
       assignPublicIp: true,
       enableExecuteCommand: true,
+      capacityProviderStrategies: [
+        { capacityProvider: 'FARGATE',      weight: 1, base: 1 },
+        { capacityProvider: 'FARGATE_SPOT', weight: 4, base: 0 },
+      ],
       taskImageOptions: {
         image: ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/python:3.11-alpine'),
         containerPort: 8080,
@@ -222,6 +227,11 @@ export class VexilloStack extends cdk.Stack {
         },
       },
     });
+
+    // Give the container 120 s to drain SSE connections on SIGTERM before ECS
+    // force-kills it. Matches Bun's idleTimeout and the Fargate Spot 2-min notice.
+    (apiService.taskDefinition.node.defaultChild as cdk.CfnResource)
+      .addPropertyOverride('ContainerDefinitions.0.StopTimeout', 120);
 
     // ALB target group health check
     apiService.targetGroup.configureHealthCheck({
@@ -389,7 +399,7 @@ export class VexilloStack extends cdk.Stack {
           cachePolicy: sdkFlagsCachePolicy,
           originRequestPolicy: sdkOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          compress: false,
+          compress: true,
         },
         '/api/sdk/flags/stream': {
           origin: albOrigin,
@@ -397,7 +407,7 @@ export class VexilloStack extends cdk.Stack {
           cachePolicy: sdkStreamCachePolicy,
           originRequestPolicy: sdkOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          compress: false,
+          compress: false, // SSE stream — compression must stay off to avoid buffering
         },
         '/api/*': {
           origin: albOrigin,
@@ -405,7 +415,7 @@ export class VexilloStack extends cdk.Stack {
           cachePolicy: apiCachePolicy,
           originRequestPolicy: apiOriginRequestPolicy,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          compress: false,
+          compress: true,
         },
       },
       errorResponses: [
@@ -413,6 +423,7 @@ export class VexilloStack extends cdk.Stack {
         { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: cdk.Duration.seconds(0) },
       ],
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
 
     // ── Stack outputs ─────────────────────────────────────────────────────────
