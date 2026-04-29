@@ -179,7 +179,7 @@ export class VexilloStack extends cdk.Stack {
     // ── CloudWatch log group ──────────────────────────────────────────────────
     const logGroup = new logs.LogGroup(this, 'ApiLogGroup', {
       logGroupName: '/vexillo/api',
-      retention: logs.RetentionDays.ONE_MONTH,
+      retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
