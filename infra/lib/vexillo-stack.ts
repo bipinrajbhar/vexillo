@@ -230,7 +230,8 @@ export class VexilloStack extends cdk.Stack {
 
     // Give the container 120 s to drain SSE connections on SIGTERM before ECS
     // force-kills it. Matches Bun's idleTimeout and the Fargate Spot 2-min notice.
-    apiService.taskDefinition.defaultContainer?.addStopTimeout(cdk.Duration.seconds(120));
+    (apiService.taskDefinition.node.defaultChild as cdk.CfnResource)
+      .addPropertyOverride('ContainerDefinitions.0.StopTimeout', 120);
 
     // ALB target group health check
     apiService.targetGroup.configureHealthCheck({
