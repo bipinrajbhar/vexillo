@@ -1,10 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Vexillo">
+  <title>Vexillo</title>
   <style>
-    .mark { fill: #0E1116; }
+    .shape { fill: #1c1917; }
+    .bar { fill: #f5f5f4; }
     @media (prefers-color-scheme: dark) {
-      .mark { fill: #FAFAF7; }
+      .shape { fill: #f5f5f4; }
+      .bar { fill: #1c1917; }
     }
   </style>
-  <rect class="mark" x="12" y="8" width="3" height="80"/>
-  <path class="mark" d="M15 18 L70 18 L52 44 L70 70 L15 70 L15 60 L52 60 L40 44 L52 28 L15 28 Z"/>
+  <defs>
+    <clipPath id="v-clip">
+      <path d="M 4 4 L 11.2 4 L 16 19.2 L 20.8 4 L 28 4 L 18.4 28 L 13.6 28 Z"/>
+    </clipPath>
+  </defs>
+  <path class="shape" d="M 4 4 L 11.2 4 L 16 19.2 L 20.8 4 L 28 4 L 18.4 28 L 13.6 28 Z"/>
+  <rect class="bar" x="2.4" y="14.133" width="27.2" height="1.467"/>
+  <g clip-path="url(#v-clip)">
+    <rect class="shape" x="22.4" y="14.133" width="7.2" height="1.467"/>
+  </g>
 </svg>

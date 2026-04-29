@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-label="Vexillo">
+  <title>Vexillo</title>
+  <defs>
+    <clipPath id="v-clip">
+      <path d="M 30 30 L 84 30 L 120 144 L 156 30 L 210 30 L 138 210 L 102 210 Z"></path>
+    </clipPath>
+  </defs>
+  <path d="M 30 30 L 84 30 L 120 144 L 156 30 L 210 30 L 138 210 L 102 210 Z" fill="#FFFFFF"></path>
+  <rect x="18" y="106" width="204" height="11" fill="#000000"></rect>
+  <g clip-path="url(#v-clip)">
+    <rect x="168" y="106" width="54" height="11" fill="#FFFFFF"></rect>
+  </g>
+</svg>

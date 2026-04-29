@@ -54,7 +54,7 @@ export function OrgSignInPage() {
           </div>
         ) : (
           <div className="page-enter flex w-full max-w-[420px] flex-col items-center">
-            <VexilloMark className="mb-5 h-10 w-auto text-foreground" />
+            <VexilloMark className="mb-5 h-10 w-auto" />
 
             <h1 className="page-enter-delay-1 mb-6 font-heading text-2xl font-semibold tracking-[-0.02em] text-foreground">
               {state.phase === 'ready' && `Sign in to ${state.org.name}`}
