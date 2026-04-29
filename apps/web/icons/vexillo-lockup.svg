@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="240" viewBox="0 0 820 240" role="img" aria-label="Vexillo">
+  <title>Vexillo</title>
+  <defs>
+    <clipPath id="v-clip">
+      <path d="M 30 30 L 84 30 L 120 144 L 156 30 L 210 30 L 138 210 L 102 210 Z"></path>
+    </clipPath>
+  </defs>
+  <g>
+    <path d="M 30 30 L 84 30 L 120 144 L 156 30 L 210 30 L 138 210 L 102 210 Z" fill="#0A0A0B"></path>
+    <rect x="18" y="106" width="204" height="11" fill="#F5F4EF"></rect>
+    <g clip-path="url(#v-clip)">
+      <rect x="168" y="106" width="54" height="11" fill="#0A0A0B"></rect>
+    </g>
+  </g>
+  <text x="268" y="158" font-family="Geist, Inter, system-ui, -apple-system, Helvetica, Arial, sans-serif" font-weight="600" font-size="148" letter-spacing="-7" fill="#0A0A0B">vexillo</text>
+</svg>
