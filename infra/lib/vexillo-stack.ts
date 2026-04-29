@@ -146,6 +146,7 @@ export class VexilloStack extends cdk.Stack {
     const cluster = new ecs.Cluster(this, 'Cluster', {
       vpc,
       clusterName: 'vexillo',
+      enableFargateCapacityProviders: true,
     });
 
     // ── Task execution role (pull image from ECR, read SSM, write logs) ───────
@@ -197,6 +198,10 @@ export class VexilloStack extends cdk.Stack {
       publicLoadBalancer: true,
       assignPublicIp: true,
       enableExecuteCommand: true,
+      capacityProviderStrategies: [
+        { capacityProvider: 'FARGATE',      weight: 1, base: 1 },
+        { capacityProvider: 'FARGATE_SPOT', weight: 4, base: 0 },
+      ],
       taskImageOptions: {
         image: ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/python:3.11-alpine'),
         containerPort: 8080,
@@ -222,6 +227,10 @@ export class VexilloStack extends cdk.Stack {
         },
       },
     });
+
+    // Give the container 120 s to drain SSE connections on SIGTERM before ECS
+    // force-kills it. Matches Bun's idleTimeout and the Fargate Spot 2-min notice.
+    apiService.taskDefinition.defaultContainer?.addStopTimeout(cdk.Duration.seconds(120));
 
     // ALB target group health check
     apiService.targetGroup.configureHealthCheck({
