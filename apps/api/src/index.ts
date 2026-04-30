@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
+import { serveStatic } from 'hono/bun';
 import { Scalar } from '@scalar/hono-api-reference';
 import { createDbClient } from '@vexillo/db';
 import { createSdkRouter, SDK_OPENAPI_CONFIG } from './routes/sdk';
@@ -86,9 +87,8 @@ app.use(
   }),
 );
 
-// Health check — ALB target group uses "/" (CF default), also expose "/health"
-// and "/api/health" (the path CloudFront forwards after stripping nothing from /api/*)
-app.get('/', (c) => c.json({ status: 'ok' }));
+// Health check — K8s probes use /health; /api/health is also exposed for CDN
+// configurations that forward /api/* to the service.
 app.get('/health', (c) => c.json({ status: 'ok' }));
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 
@@ -122,9 +122,28 @@ app.route(
   createSuperAdminRouter(db, (headers) => auth.api.getSession({ headers })),
 );
 
-// Internal cross-region propagation — not exposed via CloudFront; reachable
-// only via the ALB directly from the primary region's ECS tasks.
+// Internal cross-region propagation — reachable only inside the cluster /
+// VPC; the public CDN does not forward /internal/*.
 app.route('/internal', createInternalRouter(snapshotCache, streamRegistry, redisClients?.publisher, INTERNAL_SECRET));
+
+// Vite SPA — bundled into the container at ./apps/web/dist. When the SPA is
+// later moved to S3+CDN (Akamai/CloudFront), the CDN routes "/" to S3 and
+// "/api/*" to this service; set SERVE_SPA=false (or stop bundling the dist)
+// and these handlers become inert without an application code change.
+const isApiPath = (path: string) =>
+  path.startsWith('/api/') || path.startsWith('/internal/') || path === '/health';
+
+if (process.env.SERVE_SPA !== 'false') {
+  const spaDistPath = process.env.SPA_DIST_PATH ?? './apps/web/dist';
+  app.use('/*', async (c, next) => {
+    if (isApiPath(c.req.path)) return next();
+    return serveStatic({ root: spaDistPath })(c, next);
+  });
+  app.get('*', async (c, next) => {
+    if (isApiPath(c.req.path)) return next();
+    return serveStatic({ path: `${spaDistPath}/index.html` })(c, next);
+  });
+}
 
 const port = Number(process.env.PORT ?? 3000);
 

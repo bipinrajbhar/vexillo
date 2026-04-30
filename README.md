@@ -92,17 +92,19 @@ Then:
 
 ## Deployment
 
-See [`infra/DEPLOY.md`](infra/DEPLOY.md) for deploying to AWS (CDK, ECS Fargate, RDS, CloudFront).
+Vexillo is built and promoted by the rhapsody Jenkins pipeline
+([`Jenkinsfile`](Jenkinsfile)) and deployed as a Kubernetes service
+in EKS via the per-environment Helm values under [`k8s/`](k8s/). On the
+`develop` branch, builds are promoted to **DEV → QA → STAGING**.
 
-### Multi-region (Phase 1)
+The Hono API and the Vite SPA ship in a single container image
+([`Dockerfile`](Dockerfile)); the API serves the built SPA for non-`/api/*`
+paths. When the SPA is later moved to S3 + Akamai/CloudFront, set
+`SERVE_SPA=false` and the same image becomes API-only with no code change.
 
-Deploy a second region by passing a context variable to CDK:
-
-```sh
-cdk deploy --context region=eu-west-1
-```
-
-The secondary stack omits RDS — its ECS tasks connect to the primary's RDS in us-east-1 via the same `DATABASE_URL`. Flag changes toggled on the primary are propagated to each secondary's `/internal/flag-change` endpoint in under 5 seconds. Set `SECONDARY_REGION_URLS` on the primary after deploying secondaries, and set the same `INTERNAL_SECRET` in SSM in every region.
+PostgreSQL is provisioned as a managed RDS instance outside K8s — see
+[`infra/README.md`](infra/README.md) for the RDS, Vault, and SPA-hosting
+plan.
 
 ## React SDK
 
