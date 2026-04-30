@@ -1,0 +1,16 @@
+openapi: 3.0.1
+info:
+  title: vexillo
+  x-cortex-git:
+    github:
+      repository: RHCommerceDev/vexillo
+  x-cortex-tag: vexillo
+  x-cortex-dashboards:
+    embeds:
+      - url: https://grafana.rhapsody.rh.com/d-solo/KOgZsyJik/generic-service-dashboard?orgId=1&from=now-24h&to=now&refresh=30s&var-namespace=production&var-service=vexillo-v1&panelId=4
+        type: grafana
+      - url: https://grafana.rhapsody.rh.com/d-solo/KOgZsyJik/generic-service-dashboard?orgId=1&from=now-24h&to=now&refresh=30s&var-namespace=production&var-service=vexillo-v1&panelId=11
+        type: grafana
+  x-cortex-static-analysis:
+    sonarqube:
+      project: org.rh:vexillo

@@ -1,0 +1,49 @@
+envVars:
+  PORT: 80
+  NODE_ENV: production
+  SERVE_SPA: "true"
+
+  # Public URL the Hono/BetterAuth server is reachable at — used to build
+  # OAuth redirect URIs and absolute links. TODO: set to the real DEV hostname
+  # once routing is wired (e.g. https://vexillo.dev.rhnonprod.com).
+  BETTER_AUTH_URL: https://vexillo.dev.rhnonprod.com
+
+  # Comma-separated list of emails auto-promoted to super-admin on first sign-in.
+  SUPER_ADMIN_EMAILS: ""
+
+  # ── TODO: migrate to Vault ─────────────────────────────────────────────
+  # The values below are placeholders and must be supplied by the
+  # rhapsody secret-injection layer (Vault) before the service can start.
+  # Until Vault wiring is in place these are stubbed inline so the
+  # deployment can be promoted; replace with Vault refs once available.
+  DATABASE_URL: ""               # postgres://... (RDS endpoint)
+  BETTER_AUTH_SECRET: ""         # openssl rand -hex 32
+  OKTA_SECRET_KEY: ""            # openssl rand -hex 32
+  INTERNAL_SECRET: ""            # openssl rand -hex 32
+  REDIS_URL: ""                  # optional; enables cross-pod SSE fan-out
+
+service:
+  name: vexillo
+  internalPort: 80
+  apiversion: v1
+  version: 0.0.1
+  livenessProbe:
+    path: /health
+  startupProbe:
+    path: /health
+    failureThreshold: 30
+    periodSeconds: 10
+  readinessProbe:
+    path: /health
+    periodSeconds: 10
+    failureThreshold: 3
+replicaCount: 1
+scaling:
+  enabled: false
+resources:
+  limits:
+    cpu: 1
+    memory: 1024Mi
+  requests:
+    cpu: 100m
+    memory: 512Mi

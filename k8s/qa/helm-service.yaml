@@ -1,0 +1,12 @@
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 20m
+  internal: true
+  external: true
+  legacy: false
+service:
+  apiversion: v1
+  externalPort: 80
+  internalPort: 80
+  name: vexillo
+  metricsType: none

@@ -1,0 +1,44 @@
+envVars:
+  PORT: 80
+  NODE_ENV: production
+  SERVE_SPA: "true"
+
+  # TODO: set to the real PRODUCTION hostname once routing is wired.
+  BETTER_AUTH_URL: https://vexillo.rh.com
+
+  SUPER_ADMIN_EMAILS: ""
+
+  # ── TODO: migrate to Vault ─────────────────────────────────────────────
+  DATABASE_URL: ""
+  BETTER_AUTH_SECRET: ""
+  OKTA_SECRET_KEY: ""
+  INTERNAL_SECRET: ""
+  REDIS_URL: ""
+
+service:
+  name: vexillo
+  internalPort: 80
+  apiversion: v1
+  version: 0.0.1
+  livenessProbe:
+    path: /health
+    timeoutSeconds: 6
+  startupProbe:
+    path: /health
+    failureThreshold: 30
+    periodSeconds: 10
+  readinessProbe:
+    path: /health
+    periodSeconds: 10
+    failureThreshold: 3
+scaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+resources:
+  limits:
+    cpu: 2
+    memory: 2048Mi
+  requests:
+    cpu: 250m
+    memory: 1024Mi
