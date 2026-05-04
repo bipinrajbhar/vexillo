@@ -5,6 +5,7 @@ import type { GetSession, Session } from './dashboard';
 import type { DashboardService, OrgRow } from '../services/dashboard-service';
 import { NotFoundError, ConflictError, PreconditionError, ForbiddenError, createDashboardService } from '../services/dashboard-service';
 import type { OrgContextResolver } from '../lib/org-context-resolver';
+import { createTestFlagChangeNotifier } from '../lib/flag-change-notifier.test-adapter';
 import type { DbClient } from '@vexillo/db';
 
 // ── Session fixtures ─────────────────────────────────────────────────────────
@@ -849,20 +850,23 @@ describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
 // so that .returning() can chain after it), unlike the org-oauth mock which makes
 // it terminal. This matches the toggleFlag + queryEnvironmentFlagStates call shapes.
 
-function makeServiceDb(results: unknown[][]): DbClient {
+function makeServiceDb(results: Array<unknown[] | Error>): DbClient {
   const queue = [...results];
-  function consume(): unknown[] {
-    return (queue.shift() ?? []) as unknown[];
+  function consume(): Promise<unknown[]> {
+    const next = queue.shift();
+    if (next instanceof Error) return Promise.reject(next);
+    return Promise.resolve((next ?? []) as unknown[]);
   }
   const chain: Record<string, unknown> = {};
   chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(consume()).then(resolve, reject);
+    consume().then(resolve, reject);
   for (const m of ['select', 'from', 'where', 'leftJoin', 'innerJoin', 'insert', 'values', 'onConflictDoUpdate', 'set', 'update', 'delete']) {
     chain[m] = () => chain;
   }
   for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing']) {
-    chain[m] = () => Promise.resolve(consume());
+    chain[m] = () => consume();
   }
+  chain.transaction = (fn: (tx: unknown) => Promise<unknown>) => fn(chain);
   return chain as unknown as DbClient;
 }
 
@@ -875,20 +879,19 @@ describe('createDashboardService — toggleFlag Redis publish', () => {
       [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }], // queryEnvironmentFlagStates (orderBy)
     ]);
 
-    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
-
-    const service = createDashboardService(db, notifyMock);
+    const notifier = createTestFlagChangeNotifier();
+    const service = createDashboardService(db, notifier.notify);
     const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
 
     expect(result).toEqual({ enabled: true });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    const [envId, payload] = notifyMock.mock.calls[0] as unknown as [string, string];
-    expect(envId).toBe('env-1');
-    const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean }> };
-    expect(parsed.flags).toEqual([
-      { key: 'feat-a', enabled: true },
-      { key: 'feat-b', enabled: false },
-    ]);
+    expect(notifier.calls).toHaveLength(1);
+    expect(notifier.lastCall()!.environmentId).toBe('env-1');
+    expect(notifier.lastCall()!.parsedPayload).toEqual({
+      flags: [
+        { key: 'feat-a', enabled: true },
+        { key: 'feat-b', enabled: false },
+      ],
+    });
   });
 
   it('does not publish when no redisPublisher is provided', async () => {
@@ -914,14 +917,13 @@ describe('createDashboardService — updateCountryRules', () => {
       [{ key: 'feat-a', enabled: true, allowedCountries: ['US', 'CA'] }], // queryEnvironmentFlagStates (orderBy)
     ]);
 
-    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
-    const service = createDashboardService(db, notifyMock);
+    const notifier = createTestFlagChangeNotifier();
+    const service = createDashboardService(db, notifier.notify);
     const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', ['us', 'ca']);
 
     expect(result).toEqual({ countries: ['US', 'CA'] });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    const [envId] = notifyMock.mock.calls[0] as unknown as [string, string];
-    expect(envId).toBe('env-1');
+    expect(notifier.calls).toHaveLength(1);
+    expect(notifier.lastCall()!.environmentId).toBe('env-1');
   });
 
   it('clears rules when countries is empty', async () => {
@@ -944,6 +946,55 @@ describe('createDashboardService — updateCountryRules', () => {
 
     const service = createDashboardService(db);
     await expect(service.updateCountryRules('org-1', 'actor-1', 'missing', 'env-1', ['US'])).rejects.toThrow('Flag not found');
+  });
+});
+
+describe('createDashboardService — createFlag transaction boundary', () => {
+  it('creates flag and returns it on success', async () => {
+    const flagRow = { id: 'f1', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date(), createdByUserId: 'u1' };
+    const db = makeServiceDb([
+      [{ id: 'env-1' }], // queryOrgEnvironmentIds (thenable)
+      [flagRow],          // insertFlag (returning)
+      [],                 // backfillFlagStatesForFlag (onConflictDoNothing)
+      [],                 // insertAuditLog (thenable)
+    ]);
+    const service = createDashboardService(db);
+    const result = await service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' });
+    expect(result).toEqual(flagRow);
+  });
+
+  it('propagates error when backfill throws inside the transaction', async () => {
+    const flagRow = { id: 'f1', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date(), createdByUserId: 'u1' };
+    const db = makeServiceDb([
+      [{ id: 'env-1' }],                          // queryOrgEnvironmentIds (thenable)
+      [flagRow],                                    // insertFlag (returning)
+      new Error('simulated backfill failure'),      // backfillFlagStatesForFlag (onConflictDoNothing)
+    ]);
+    const service = createDashboardService(db);
+    await expect(
+      service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
+    ).rejects.toThrow('simulated backfill failure');
+  });
+
+  it('maps unique constraint error from insertFlag to ConflictError', async () => {
+    const db = makeServiceDb([
+      [{ id: 'env-1' }],                                                    // queryOrgEnvironmentIds (thenable)
+      new Error('duplicate key value violates unique constraint "flags_key"'), // insertFlag (returning)
+    ]);
+    const service = createDashboardService(db);
+    await expect(
+      service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it('throws PreconditionError when no environments exist', async () => {
+    const db = makeServiceDb([
+      [], // queryOrgEnvironmentIds returns empty
+    ]);
+    const service = createDashboardService(db);
+    await expect(
+      service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
+    ).rejects.toThrow('Create an environment before creating flags');
   });
 });
 

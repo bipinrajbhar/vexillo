@@ -176,9 +176,12 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       const key = input.key?.trim() || slugify(input.name);
       if (!key) throw new PreconditionError('Invalid key');
       try {
-        const flag = await insertFlag(db, orgId, { name: input.name, key, description: input.description, createdByUserId: actorId });
-        await backfillFlagStatesForFlag(db, flag.id, envIds.map((e) => e.id));
-        await insertAuditLog(db, { orgId, actorId, action: 'flag.create', targetType: 'flag', targetId: flag.id, metadata: { name: flag.name, key: flag.key } });
+        const flag = await db.transaction(async (tx) => {
+          const created = await insertFlag(tx as unknown as DbClient, orgId, { name: input.name, key, description: input.description, createdByUserId: actorId });
+          await backfillFlagStatesForFlag(tx as unknown as DbClient, created.id, envIds.map((e) => e.id));
+          await insertAuditLog(tx as unknown as DbClient, { orgId, actorId, action: 'flag.create', targetType: 'flag', targetId: created.id, metadata: { name: created.name, key: created.key } });
+          return created;
+        });
         flagsCache.delete(orgId);
         return flag;
       } catch (err) {
@@ -279,9 +282,11 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       const rawKey = generateApiKey();
       const keyHash = await hashKey(rawKey);
       const keyHint = maskKey(rawKey);
-      const ok = await rotateEnvironmentKey(db, orgId, envId, { keyHash, keyHint });
-      if (!ok) throw new NotFoundError('Environment not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'environment.rotate_key', targetType: 'apiKey', targetId: envId });
+      await db.transaction(async (tx) => {
+        const ok = await rotateEnvironmentKey(tx as unknown as DbClient, orgId, envId, { keyHash, keyHint });
+        if (!ok) throw new NotFoundError('Environment not found');
+        await insertAuditLog(tx as unknown as DbClient, { orgId, actorId, action: 'environment.rotate_key', targetType: 'apiKey', targetId: envId });
+      });
       envsCache.delete(orgId);
       return { apiKey: rawKey };
     },
