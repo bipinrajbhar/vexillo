@@ -2,10 +2,9 @@ import { describe, it, expect, mock } from 'bun:test';
 import { Hono } from 'hono';
 import { createDashboardRouter } from './dashboard';
 import type { GetSession, Session } from './dashboard';
-import type { DashboardService, OrgRow } from '../services/dashboard-service';
+import type { DashboardService, OrgRow, ServiceEffects } from '../services/dashboard-service';
 import { NotFoundError, ConflictError, PreconditionError, ForbiddenError, createDashboardService } from '../services/dashboard-service';
 import type { OrgContextResolver } from '../lib/org-context-resolver';
-import { createTestFlagChangeNotifier } from '../lib/flag-change-notifier.test-adapter';
 import type { DbClient } from '@vexillo/db';
 
 // ── Session fixtures ─────────────────────────────────────────────────────────
@@ -97,6 +96,21 @@ function makeApp(service: DashboardService, getSession: GetSession, resolver: Or
   const app = new Hono();
   app.route('/api/dashboard', createDashboardRouter(service, getSession, resolver));
   return app;
+}
+
+// ── Mock effects factory ─────────────────────────────────────────────────────
+//
+// Returns a ServiceEffects where every method is a tracked mock (no-op by default).
+// Override individual methods on the returned object to configure specific behaviour.
+
+function makeNullEffects(): ServiceEffects {
+  return {
+    audit: mock(async () => {}),
+    invalidate: mock(() => {}),
+    publishFlagChange: mock(async () => {}),
+    evictAuthCache: mock(() => {}),
+    evictMemberContext: mock(() => {}),
+  };
 }
 
 const BASE = 'http://localhost/api/dashboard/acme';
@@ -844,11 +858,10 @@ describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
   });
 });
 
-// ── DashboardService — toggleFlag Redis publish ───────────────────────────────
+// ── DashboardService — service boundary tests ─────────────────────────────────
 //
-// Queue-based mock DB where onConflictDoUpdate is non-terminal (returns the chain
-// so that .returning() can chain after it), unlike the org-oauth mock which makes
-// it terminal. This matches the toggleFlag + queryEnvironmentFlagStates call shapes.
+// Queue-based mock DB that simulates the Drizzle query builder chain.
+// onConflictDoUpdate is non-terminal so .returning() can chain after it.
 
 function makeServiceDb(results: Array<unknown[] | Error>): DbClient {
   const queue = [...results];
@@ -870,60 +883,60 @@ function makeServiceDb(results: Array<unknown[] | Error>): DbClient {
   return chain as unknown as DbClient;
 }
 
-describe('createDashboardService — toggleFlag Redis publish', () => {
-  it('publishes the full flag snapshot to flags:env:{environmentId} after a successful toggle', async () => {
+describe('createDashboardService — toggleFlag effects', () => {
+  it('calls publishFlagChange and audit after a successful toggle', async () => {
     const db = makeServiceDb([
-      [{ id: 'flag-1' }],                                               // flags lookup (thenable)
-      [{ enabled: true }],                                               // flagStates upsert (returning)
-      [],                                                                // audit log insert (returning)
-      [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }], // queryEnvironmentFlagStates (orderBy)
+      [{ id: 'flag-1' }],  // flags lookup (thenable)
+      [{ enabled: true }],  // flagStates upsert (returning)
     ]);
 
-    const notifier = createTestFlagChangeNotifier();
-    const service = createDashboardService(db, notifier.notify);
+    const effects = makeNullEffects();
+    const service = createDashboardService(db, effects);
     const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
 
     expect(result).toEqual({ enabled: true });
-    expect(notifier.calls).toHaveLength(1);
-    expect(notifier.lastCall()!.environmentId).toBe('env-1');
-    expect(notifier.lastCall()!.parsedPayload).toEqual({
-      flags: [
-        { key: 'feat-a', enabled: true },
-        { key: 'feat-b', enabled: false },
-      ],
-    });
+    expect(effects.publishFlagChange).toHaveBeenCalledTimes(1);
+    expect((effects.publishFlagChange as ReturnType<typeof mock>).mock.calls[0]).toEqual(['org-1', 'env-1']);
+    expect(effects.audit).toHaveBeenCalledTimes(1);
+    expect((effects.audit as ReturnType<typeof mock>).mock.calls[0]).toMatchObject([
+      'org-1', 'actor-1', expect.objectContaining({ action: 'flag.toggle' }),
+    ]);
+    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['flags']);
   });
 
-  it('does not publish when no redisPublisher is provided', async () => {
+  it('throws NotFoundError and calls no effects when flag is missing', async () => {
     const db = makeServiceDb([
-      [{ id: 'flag-1' }],   // flags lookup
-      [{ enabled: false }], // flagStates upsert
-      [],                   // audit log
+      [],  // flags lookup returns empty → toggle returns null
     ]);
 
-    const service = createDashboardService(db);
-    const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
-    expect(result).toEqual({ enabled: false });
+    const effects = makeNullEffects();
+    const service = createDashboardService(db, effects);
+    await expect(service.toggleFlag('org-1', 'actor-1', 'missing', 'env-1')).rejects.toThrow('Flag not found');
+    expect(effects.publishFlagChange).not.toHaveBeenCalled();
+    expect(effects.audit).not.toHaveBeenCalled();
   });
 });
 
-describe('createDashboardService — updateCountryRules', () => {
-  it('persists rules, writes audit log with before/after, and notifies', async () => {
+describe('createDashboardService — updateCountryRules effects', () => {
+  it('calls publishFlagChange and audit with before/after metadata', async () => {
     const db = makeServiceDb([
-      [{ id: 'flag-1' }],                                      // flags lookup (thenable)
-      [{ allowedCountries: ['FR'] }],                           // current flagStates (limit)
-      [{ allowedCountries: ['US', 'CA'] }],                     // upsert returning
-      [],                                                       // audit log (returning)
-      [{ key: 'feat-a', enabled: true, allowedCountries: ['US', 'CA'] }], // queryEnvironmentFlagStates (orderBy)
+      [{ id: 'flag-1' }],                         // flags lookup (thenable)
+      [{ allowedCountries: ['FR'] }],              // current flagStates (limit)
+      [{ allowedCountries: ['US', 'CA'] }],        // upsert returning
     ]);
 
-    const notifier = createTestFlagChangeNotifier();
-    const service = createDashboardService(db, notifier.notify);
+    const effects = makeNullEffects();
+    const service = createDashboardService(db, effects);
     const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', ['us', 'ca']);
 
     expect(result).toEqual({ countries: ['US', 'CA'] });
-    expect(notifier.calls).toHaveLength(1);
-    expect(notifier.lastCall()!.environmentId).toBe('env-1');
+    expect(effects.publishFlagChange).toHaveBeenCalledTimes(1);
+    expect((effects.publishFlagChange as ReturnType<typeof mock>).mock.calls[0]).toEqual(['org-1', 'env-1']);
+    expect(effects.audit).toHaveBeenCalledTimes(1);
+    expect((effects.audit as ReturnType<typeof mock>).mock.calls[0]).toMatchObject([
+      'org-1', 'actor-1', expect.objectContaining({ action: 'flag.country-rules.update' }),
+    ]);
+    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['flags']);
   });
 
   it('clears rules when countries is empty', async () => {
@@ -931,36 +944,40 @@ describe('createDashboardService — updateCountryRules', () => {
       [{ id: 'flag-1' }],             // flags lookup (thenable)
       [{ allowedCountries: ['US'] }], // current state (limit)
       [{ allowedCountries: [] }],     // upsert returning
-      [],                             // audit log
     ]);
 
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullEffects());
     const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', []);
     expect(result).toEqual({ countries: [] });
   });
 
-  it('returns NotFoundError when flag does not exist', async () => {
+  it('throws NotFoundError when flag does not exist', async () => {
     const db = makeServiceDb([
       [], // flags lookup returns empty
     ]);
 
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullEffects());
     await expect(service.updateCountryRules('org-1', 'actor-1', 'missing', 'env-1', ['US'])).rejects.toThrow('Flag not found');
   });
 });
 
 describe('createDashboardService — createFlag transaction boundary', () => {
-  it('creates flag and returns it on success', async () => {
+  it('creates flag, calls audit, and invalidates flags cache on success', async () => {
     const flagRow = { id: 'f1', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date(), createdByUserId: 'u1' };
     const db = makeServiceDb([
       [{ id: 'env-1' }], // queryOrgEnvironmentIds (thenable)
       [flagRow],          // insertFlag (returning)
       [],                 // backfillFlagStatesForFlag (onConflictDoNothing)
-      [],                 // insertAuditLog (thenable)
     ]);
-    const service = createDashboardService(db);
+    const effects = makeNullEffects();
+    const service = createDashboardService(db, effects);
     const result = await service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' });
     expect(result).toEqual(flagRow);
+    expect(effects.audit).toHaveBeenCalledTimes(1);
+    expect((effects.audit as ReturnType<typeof mock>).mock.calls[0]).toMatchObject([
+      'org-1', 'u1', expect.objectContaining({ action: 'flag.create' }),
+    ]);
+    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['flags']);
   });
 
   it('propagates error when backfill throws inside the transaction', async () => {
@@ -970,7 +987,7 @@ describe('createDashboardService — createFlag transaction boundary', () => {
       [flagRow],                                    // insertFlag (returning)
       new Error('simulated backfill failure'),      // backfillFlagStatesForFlag (onConflictDoNothing)
     ]);
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullEffects());
     await expect(
       service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
     ).rejects.toThrow('simulated backfill failure');
@@ -981,7 +998,7 @@ describe('createDashboardService — createFlag transaction boundary', () => {
       [{ id: 'env-1' }],                                                    // queryOrgEnvironmentIds (thenable)
       new Error('duplicate key value violates unique constraint "flags_key"'), // insertFlag (returning)
     ]);
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullEffects());
     await expect(
       service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
     ).rejects.toBeInstanceOf(ConflictError);
@@ -991,39 +1008,41 @@ describe('createDashboardService — createFlag transaction boundary', () => {
     const db = makeServiceDb([
       [], // queryOrgEnvironmentIds returns empty
     ]);
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullEffects());
     await expect(
       service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
     ).rejects.toThrow('Create an environment before creating flags');
   });
 });
 
-describe('createDashboardService — updateEnvironmentOrigins scoped cache invalidation', () => {
-  it('calls clearAuthCache with the environment id, not a full flush', async () => {
+describe('createDashboardService — updateEnvironmentOrigins effects', () => {
+  it('calls evictAuthCache with the environment id, not a full flush', async () => {
     const db = makeServiceDb([
       [{ id: 'env-1', orgId: 'org-1', allowedOrigins: ['https://example.com'] }], // updateEnvironmentOrigins (thenable)
-      [], // audit log (returning)
     ]);
 
-    const clearMock = mock((_envId: string) => {});
-    const service = createDashboardService(db, undefined, clearMock);
+    const effects = makeNullEffects();
+    const service = createDashboardService(db, effects);
     await service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-1', ['https://example.com']);
 
-    expect(clearMock).toHaveBeenCalledTimes(1);
-    const [envId] = clearMock.mock.calls[0] as unknown as [string];
+    expect(effects.evictAuthCache).toHaveBeenCalledTimes(1);
+    const [envId] = (effects.evictAuthCache as ReturnType<typeof mock>).mock.calls[0] as unknown as [string];
     expect(envId).toBe('env-1');
+    expect(effects.audit).toHaveBeenCalledTimes(1);
+    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['envs']);
   });
 
-  it('throws NotFoundError and does not call clearAuthCache when environment is not found', async () => {
+  it('throws NotFoundError and calls no effects when environment is not found', async () => {
     const db = makeServiceDb([
       [], // updateEnvironmentOrigins returns nothing — not found
     ]);
 
-    const clearMock = mock((_envId: string) => {});
-    const service = createDashboardService(db, undefined, clearMock);
+    const effects = makeNullEffects();
+    const service = createDashboardService(db, effects);
     await expect(
       service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-missing', ['https://example.com']),
     ).rejects.toThrow('Environment not found');
-    expect(clearMock).not.toHaveBeenCalled();
+    expect(effects.evictAuthCache).not.toHaveBeenCalled();
+    expect(effects.audit).not.toHaveBeenCalled();
   });
 });

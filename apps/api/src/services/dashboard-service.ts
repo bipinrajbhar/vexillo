@@ -25,6 +25,7 @@ import {
   queryRemovedOrgMembers,
   queryUserIsSuperAdmin,
   insertAuditLog,
+  type AuditEntry,
   type FlagWithStates,
   type EnvRef,
   type EnvironmentWithKey,
@@ -37,6 +38,7 @@ import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
 
 export type NotifyFlagChange = (environmentId: string, payload: string) => void | Promise<void>;
 export type ClearAuthCache = (environmentId: string) => void;
+export type InvalidateMemberContext = (orgId: string, userId: string) => void;
 
 // ── Domain errors ──────────────────────────────────────────────────────────────
 
@@ -85,7 +87,72 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-// ── Interface ──────────────────────────────────────────────────────────────────
+// ── ServiceEffects ─────────────────────────────────────────────────────────────
+
+export type CacheDomain = 'flags' | 'envs' | 'members' | 'removedMembers';
+
+export interface ServiceEffects {
+  audit(orgId: string, actorId: string, payload: Omit<AuditEntry, 'orgId' | 'actorId'>): Promise<void>;
+  invalidate(orgId: string, domains: CacheDomain[]): void;
+  publishFlagChange(orgId: string, environmentId: string): Promise<void>;
+  evictAuthCache(environmentId: string): void;
+  evictMemberContext(orgId: string, userId: string): void;
+}
+
+export interface ServiceCaches {
+  flags: LRUCache<string, { flags: FlagWithStates[]; environments: EnvRef[] }>;
+  envs: LRUCache<string, EnvironmentWithKey[]>;
+  members: LRUCache<string, MemberRow[]>;
+  removedMembers: LRUCache<string, MemberRow[]>;
+}
+
+const TTL = 30_000;
+const MAX = 200;
+
+export function createServiceCaches(): ServiceCaches {
+  return {
+    flags: new LRUCache({ max: MAX, ttl: TTL }),
+    envs: new LRUCache({ max: MAX, ttl: TTL }),
+    members: new LRUCache({ max: MAX, ttl: TTL }),
+    removedMembers: new LRUCache({ max: MAX, ttl: TTL }),
+  };
+}
+
+export function createServiceEffects(
+  db: DbClient,
+  caches: ServiceCaches,
+  opts: {
+    notifyFlagChange?: NotifyFlagChange;
+    clearAuthCache?: ClearAuthCache;
+    invalidateMemberContext?: InvalidateMemberContext;
+  } = {},
+): ServiceEffects {
+  const { notifyFlagChange, clearAuthCache, invalidateMemberContext } = opts;
+  return {
+    async audit(orgId, actorId, payload) {
+      await insertAuditLog(db, { orgId, actorId, ...payload });
+    },
+    invalidate(orgId, domains) {
+      if (domains.includes('flags')) caches.flags.delete(orgId);
+      if (domains.includes('envs')) caches.envs.delete(orgId);
+      if (domains.includes('members')) caches.members.delete(orgId);
+      if (domains.includes('removedMembers')) caches.removedMembers.delete(orgId);
+    },
+    async publishFlagChange(orgId, environmentId) {
+      if (!notifyFlagChange) return;
+      const flagStates = await queryEnvironmentFlagStates(db, orgId, environmentId);
+      await notifyFlagChange(environmentId, JSON.stringify({ flags: flagStates }));
+    },
+    evictAuthCache(environmentId) {
+      clearAuthCache?.(environmentId);
+    },
+    evictMemberContext(orgId, userId) {
+      invalidateMemberContext?.(orgId, userId);
+    },
+  };
+}
+
+// ── DashboardService interface ─────────────────────────────────────────────────
 
 export type OrgRow = typeof organizations.$inferSelect;
 
@@ -137,22 +204,11 @@ export interface DashboardService {
   updateMemberRole(orgId: string, actorId: string, userId: string, role: string): Promise<{ userId: string; role: string }>;
   removeMember(orgId: string, actorId: string, userId: string): Promise<void>;
   restoreMember(orgId: string, actorId: string, userId: string): Promise<void>;
-
 }
 
 // ── Implementation ─────────────────────────────────────────────────────────────
 
-const TTL = 30_000;
-const MAX = 200;
-
-export type InvalidateMemberContext = (orgId: string, userId: string) => void;
-
-export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFlagChange, clearAuthCache?: ClearAuthCache, invalidateMemberContext?: InvalidateMemberContext): DashboardService {
-  const flagsCache = new LRUCache<string, { flags: FlagWithStates[]; environments: EnvRef[] }>({ max: MAX, ttl: TTL });
-  const envsCache = new LRUCache<string, EnvironmentWithKey[]>({ max: MAX, ttl: TTL });
-  const membersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
-  const removedMembersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
-
+export function createDashboardService(db: DbClient, effects: ServiceEffects, caches?: ServiceCaches): DashboardService {
   return {
     async getMyOrgs(userId) {
       return queryUserOrgs(db, userId);
@@ -161,10 +217,10 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
     // ── Flags ────────────────────────────────────────────────────────────────
 
     async getFlagsWithStates(orgId) {
-      const hit = flagsCache.get(orgId);
+      const hit = caches?.flags.get(orgId);
       if (hit) return hit;
       const result = await queryOrgFlagsWithStates(db, orgId);
-      flagsCache.set(orgId, result);
+      caches?.flags.set(orgId, result);
       return result;
     },
 
@@ -179,10 +235,10 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
         const flag = await db.transaction(async (tx) => {
           const created = await insertFlag(tx as unknown as DbClient, orgId, { name: input.name, key, description: input.description, createdByUserId: actorId });
           await backfillFlagStatesForFlag(tx as unknown as DbClient, created.id, envIds.map((e) => e.id));
-          await insertAuditLog(tx as unknown as DbClient, { orgId, actorId, action: 'flag.create', targetType: 'flag', targetId: created.id, metadata: { name: created.name, key: created.key } });
           return created;
         });
-        flagsCache.delete(orgId);
+        await effects.audit(orgId, actorId, { action: 'flag.create', targetType: 'flag', targetId: flag.id, metadata: { name: flag.name, key: flag.key } });
+        effects.invalidate(orgId, ['flags']);
         return flag;
       } catch (err) {
         if (isUniqueError(err)) throw new ConflictError('Flag key already exists');
@@ -196,27 +252,24 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       }
       const flag = await updateFlag(db, orgId, key, patch);
       if (!flag) throw new NotFoundError('Flag not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'flag.update', targetType: 'flag', targetId: flag.id, metadata: { key, changes: patch } });
-      flagsCache.delete(orgId);
+      await effects.audit(orgId, actorId, { action: 'flag.update', targetType: 'flag', targetId: flag.id, metadata: { key, changes: patch } });
+      effects.invalidate(orgId, ['flags']);
       return flag;
     },
 
     async deleteFlag(orgId, actorId, key) {
       const deleted = await deleteFlag(db, orgId, key);
       if (!deleted) throw new NotFoundError('Flag not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'flag.delete', targetType: 'flag', targetId: key, metadata: { key } });
-      flagsCache.delete(orgId);
+      await effects.audit(orgId, actorId, { action: 'flag.delete', targetType: 'flag', targetId: key, metadata: { key } });
+      effects.invalidate(orgId, ['flags']);
     },
 
     async toggleFlag(orgId, actorId, key, environmentId) {
       const result = await toggleFlag(db, orgId, key, environmentId);
       if (!result) throw new NotFoundError('Flag not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'flag.toggle', targetType: 'flag', targetId: key, metadata: { key, environmentId, enabled: result.enabled } });
-      if (notifyFlagChange) {
-        const flagStates = await queryEnvironmentFlagStates(db, orgId, environmentId);
-        await notifyFlagChange(environmentId, JSON.stringify({ flags: flagStates }));
-      }
-      flagsCache.delete(orgId);
+      await effects.audit(orgId, actorId, { action: 'flag.toggle', targetType: 'flag', targetId: key, metadata: { key, environmentId, enabled: result.enabled } });
+      await effects.publishFlagChange(orgId, environmentId);
+      effects.invalidate(orgId, ['flags']);
       return result;
     },
 
@@ -224,22 +277,19 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       const normalized = countries.map((c) => c.toUpperCase());
       const result = await setFlagCountryRules(db, orgId, key, environmentId, normalized);
       if (!result) throw new NotFoundError('Flag not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'flag.country-rules.update', targetType: 'flag', targetId: key, metadata: { key, environmentId, before: result.before, after: result.after } });
-      if (notifyFlagChange) {
-        const updatedFlags = await queryEnvironmentFlagStates(db, orgId, environmentId);
-        await notifyFlagChange(environmentId, JSON.stringify({ flags: updatedFlags }));
-      }
-      flagsCache.delete(orgId);
+      await effects.audit(orgId, actorId, { action: 'flag.country-rules.update', targetType: 'flag', targetId: key, metadata: { key, environmentId, before: result.before, after: result.after } });
+      await effects.publishFlagChange(orgId, environmentId);
+      effects.invalidate(orgId, ['flags']);
       return { countries: result.after };
     },
 
     // ── Environments ─────────────────────────────────────────────────────────
 
     async getEnvironments(orgId) {
-      const hit = envsCache.get(orgId);
+      const hit = caches?.envs.get(orgId);
       if (hit) return hit;
       const result = await queryOrgEnvironments(db, orgId);
-      envsCache.set(orgId, result);
+      caches?.envs.set(orgId, result);
       return result;
     },
 
@@ -251,9 +301,8 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       const keyHint = maskKey(rawKey);
       try {
         const environment = await insertEnvironmentWithKey(db, orgId, { name, slug, keyHash, keyHint });
-        await insertAuditLog(db, { orgId, actorId, action: 'environment.create', targetType: 'environment', targetId: environment.id, metadata: { name, slug } });
-        envsCache.delete(orgId);
-        flagsCache.delete(orgId);
+        await effects.audit(orgId, actorId, { action: 'environment.create', targetType: 'environment', targetId: environment.id, metadata: { name, slug } });
+        effects.invalidate(orgId, ['envs', 'flags']);
         return { environment, apiKey: rawKey };
       } catch (err) {
         if (isUniqueError(err)) throw new ConflictError('Environment name already exists');
@@ -264,18 +313,17 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
     async updateEnvironmentOrigins(orgId, actorId, id, allowedOrigins) {
       const result = await updateEnvironmentOrigins(db, orgId, id, allowedOrigins);
       if (!result) throw new NotFoundError('Environment not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'environment.update_origins', targetType: 'environment', targetId: id, metadata: { allowedOrigins } });
-      envsCache.delete(orgId);
-      clearAuthCache?.(id);
+      await effects.audit(orgId, actorId, { action: 'environment.update_origins', targetType: 'environment', targetId: id, metadata: { allowedOrigins } });
+      effects.invalidate(orgId, ['envs']);
+      effects.evictAuthCache(id);
       return result;
     },
 
     async deleteEnvironment(orgId, actorId, id) {
       const deleted = await deleteEnvironment(db, orgId, id);
       if (!deleted) throw new NotFoundError('Environment not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'environment.delete', targetType: 'environment', targetId: id });
-      envsCache.delete(orgId);
-      flagsCache.delete(orgId);
+      await effects.audit(orgId, actorId, { action: 'environment.delete', targetType: 'environment', targetId: id });
+      effects.invalidate(orgId, ['envs', 'flags']);
     },
 
     async rotateEnvironmentKey(orgId, actorId, envId) {
@@ -285,27 +333,27 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       await db.transaction(async (tx) => {
         const ok = await rotateEnvironmentKey(tx as unknown as DbClient, orgId, envId, { keyHash, keyHint });
         if (!ok) throw new NotFoundError('Environment not found');
-        await insertAuditLog(tx as unknown as DbClient, { orgId, actorId, action: 'environment.rotate_key', targetType: 'apiKey', targetId: envId });
       });
-      envsCache.delete(orgId);
+      await effects.audit(orgId, actorId, { action: 'environment.rotate_key', targetType: 'apiKey', targetId: envId });
+      effects.invalidate(orgId, ['envs']);
       return { apiKey: rawKey };
     },
 
     // ── Members ──────────────────────────────────────────────────────────────
 
     async getMembers(orgId) {
-      const hit = membersCache.get(orgId);
+      const hit = caches?.members.get(orgId);
       if (hit) return hit;
       const result = await queryOrgMembers(db, orgId);
-      membersCache.set(orgId, result);
+      caches?.members.set(orgId, result);
       return result;
     },
 
     async getRemovedMembers(orgId) {
-      const hit = removedMembersCache.get(orgId);
+      const hit = caches?.removedMembers.get(orgId);
       if (hit) return hit;
       const result = await queryRemovedOrgMembers(db, orgId);
-      removedMembersCache.set(orgId, result);
+      caches?.removedMembers.set(orgId, result);
       return result;
     },
 
@@ -327,9 +375,9 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       }
       const updated = await updateMemberRole(db, orgId, userId, role);
       if (!updated) throw new NotFoundError('Member not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'member.update_role', targetType: 'member', targetId: userId, metadata: { role } });
-      membersCache.delete(orgId);
-      invalidateMemberContext?.(orgId, userId);
+      await effects.audit(orgId, actorId, { action: 'member.update_role', targetType: 'member', targetId: userId, metadata: { role } });
+      effects.invalidate(orgId, ['members']);
+      effects.evictMemberContext(orgId, userId);
       return { userId, role };
     },
 
@@ -346,10 +394,9 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
         throw new ConflictError('Cannot remove the last admin');
       }
       await removeMember(db, orgId, userId);
-      await insertAuditLog(db, { orgId, actorId, action: 'member.remove', targetType: 'member', targetId: userId });
-      membersCache.delete(orgId);
-      removedMembersCache.delete(orgId);
-      invalidateMemberContext?.(orgId, userId);
+      await effects.audit(orgId, actorId, { action: 'member.remove', targetType: 'member', targetId: userId });
+      effects.invalidate(orgId, ['members', 'removedMembers']);
+      effects.evictMemberContext(orgId, userId);
     },
 
     async restoreMember(orgId, actorId, userId) {
@@ -358,10 +405,9 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       }
       const ok = await restoreMember(db, orgId, userId);
       if (!ok) throw new NotFoundError('Member not found');
-      await insertAuditLog(db, { orgId, actorId, action: 'member.restore', targetType: 'member', targetId: userId });
-      membersCache.delete(orgId);
-      removedMembersCache.delete(orgId);
-      invalidateMemberContext?.(orgId, userId);
+      await effects.audit(orgId, actorId, { action: 'member.restore', targetType: 'member', targetId: userId });
+      effects.invalidate(orgId, ['members', 'removedMembers']);
+      effects.evictMemberContext(orgId, userId);
     },
 
   };
