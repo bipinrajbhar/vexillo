@@ -8,7 +8,7 @@ import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
-import { createDashboardService } from './services/dashboard-service';
+import { createDashboardService, createServiceEffects, createServiceCaches } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
 import { createStreamRegistry } from './lib/stream-registry';
 import { createAuthCache } from './lib/auth-cache';
@@ -61,12 +61,13 @@ const notifyFlagChange = createFlagChangeNotifier({
 
 const orgContextResolver = createOrgContextResolver({ db });
 
-const dashboardService = createDashboardService(
-  db,
+const serviceCaches = createServiceCaches();
+const serviceEffects = createServiceEffects(db, serviceCaches, {
   notifyFlagChange,
-  (environmentId) => authCache.deleteByEnvironmentId(environmentId),
-  (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
-);
+  clearAuthCache: (environmentId) => authCache.deleteByEnvironmentId(environmentId),
+  invalidateMemberContext: (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
+});
+const dashboardService = createDashboardService(db, serviceEffects, serviceCaches);
 
 const app = new Hono();
 
