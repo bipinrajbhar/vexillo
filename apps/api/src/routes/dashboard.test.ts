@@ -4,6 +4,7 @@ import { createDashboardRouter } from './dashboard';
 import type { GetSession, Session } from './dashboard';
 import type { DashboardService, OrgRow } from '../services/dashboard-service';
 import { NotFoundError, ConflictError, PreconditionError, ForbiddenError, createDashboardService } from '../services/dashboard-service';
+import type { OrgContextResolver } from '../lib/org-context-resolver';
 import type { DbClient } from '@vexillo/db';
 
 // ── Session fixtures ─────────────────────────────────────────────────────────
@@ -43,7 +44,6 @@ function makeMockService(overrides: Partial<DashboardService> = {}): DashboardSe
   };
 
   return {
-    resolveOrgContext: notImplemented('resolveOrgContext') as DashboardService['resolveOrgContext'],
     getMyOrgs: notImplemented('getMyOrgs') as DashboardService['getMyOrgs'],
     getFlagsWithStates: notImplemented('getFlagsWithStates') as DashboardService['getFlagsWithStates'],
     createFlag: notImplemented('createFlag') as DashboardService['createFlag'],
@@ -65,24 +65,36 @@ function makeMockService(overrides: Partial<DashboardService> = {}): DashboardSe
   };
 }
 
-// Convenience: an adminCtx-resolving service (most tests need this to pass the org middleware).
-function adminService(overrides: Partial<DashboardService> = {}): DashboardService {
-  return makeMockService({
-    resolveOrgContext: async () => ({ org: ORG, role: 'admin' }),
+// ── Mock resolver factory ────────────────────────────────────────────────────
+
+function adminResolver(overrides: Partial<OrgContextResolver> = {}): OrgContextResolver {
+  return {
+    resolve: async () => ({ org: ORG, role: 'admin' }),
+    invalidate: () => {},
     ...overrides,
-  });
+  };
+}
+
+function viewerResolver(overrides: Partial<OrgContextResolver> = {}): OrgContextResolver {
+  return {
+    resolve: async () => ({ org: ORG, role: 'viewer' }),
+    invalidate: () => {},
+    ...overrides,
+  };
+}
+
+// Convenience aliases — service overrides only; role comes from the resolver.
+function adminService(overrides: Partial<DashboardService> = {}): DashboardService {
+  return makeMockService(overrides);
 }
 
 function viewerService(overrides: Partial<DashboardService> = {}): DashboardService {
-  return makeMockService({
-    resolveOrgContext: async () => ({ org: ORG, role: 'viewer' }),
-    ...overrides,
-  });
+  return makeMockService(overrides);
 }
 
-function makeApp(service: DashboardService, getSession: GetSession) {
+function makeApp(service: DashboardService, getSession: GetSession, resolver: OrgContextResolver = adminResolver()) {
   const app = new Hono();
-  app.route('/api/dashboard', createDashboardRouter(service, getSession));
+  app.route('/api/dashboard', createDashboardRouter(service, getSession, resolver));
   return app;
 }
 
@@ -112,31 +124,30 @@ describe('dashboard auth middleware', () => {
 
 describe('org middleware', () => {
   it('returns 404 when org slug not found', async () => {
-    const app = makeApp(
-      makeMockService({ resolveOrgContext: async () => null }),
-      adminSession,
-    );
+    const resolver = adminResolver({
+      resolve: async () => { throw new NotFoundError('Organization not found'); },
+    });
+    const app = makeApp(makeMockService(), adminSession, resolver);
     const res = await app.fetch(new Request('http://localhost/api/dashboard/nonexistent/flags'));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'Organization not found' });
   });
 
   it('returns 403 when org is suspended', async () => {
-    const suspended = { ...ORG, status: 'suspended' };
-    const app = makeApp(
-      makeMockService({ resolveOrgContext: async () => ({ org: suspended, role: 'admin' }) }),
-      adminSession,
-    );
+    const resolver = adminResolver({
+      resolve: async () => { throw new ForbiddenError('Organization suspended'); },
+    });
+    const app = makeApp(makeMockService(), adminSession, resolver);
     const res = await app.fetch(new Request(`${BASE}/flags`));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'Organization suspended' });
   });
 
   it('returns 403 when user is not a member', async () => {
-    const app = makeApp(
-      makeMockService({ resolveOrgContext: async () => ({ org: ORG, role: null }) }),
-      adminSession,
-    );
+    const resolver = adminResolver({
+      resolve: async () => { throw new ForbiddenError('Not a member of this organization'); },
+    });
+    const app = makeApp(makeMockService(), adminSession, resolver);
     const res = await app.fetch(new Request(`${BASE}/flags`));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'Not a member of this organization' });
@@ -179,6 +190,7 @@ describe('GET /api/dashboard/:orgSlug/flags', () => {
     const app = makeApp(
       viewerService({ getFlagsWithStates: async () => ({ flags: [], environments: [] }) }),
       viewerSession,
+      viewerResolver(),
     );
     const res = await app.fetch(new Request(`${BASE}/flags`));
     expect(res.status).toBe(200);
@@ -189,7 +201,7 @@ describe('GET /api/dashboard/:orgSlug/flags', () => {
 
 describe('POST /api/dashboard/:orgSlug/flags', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags`, {
         method: 'POST',
@@ -251,7 +263,7 @@ describe('POST /api/dashboard/:orgSlug/flags', () => {
 
 describe('PATCH /api/dashboard/:orgSlug/flags/:key', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag`, {
         method: 'PATCH',
@@ -300,7 +312,7 @@ describe('PATCH /api/dashboard/:orgSlug/flags/:key', () => {
 
 describe('DELETE /api/dashboard/:orgSlug/flags/:key', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag`, { method: 'DELETE' }),
     );
@@ -334,7 +346,7 @@ describe('DELETE /api/dashboard/:orgSlug/flags/:key', () => {
 
 describe('POST /api/dashboard/:orgSlug/flags/:key/toggle', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag/toggle`, {
         method: 'POST',
@@ -394,7 +406,7 @@ describe('POST /api/dashboard/:orgSlug/flags/:key/toggle', () => {
 
 describe('PUT /api/dashboard/:orgSlug/flags/:key/environments/:envId/country-rules', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
         method: 'PUT',
@@ -498,6 +510,7 @@ describe('GET /api/dashboard/:orgSlug/environments', () => {
     const app = makeApp(
       viewerService({ getEnvironments: async () => [] }),
       viewerSession,
+      viewerResolver(),
     );
     const res = await app.fetch(new Request(`${BASE}/environments`));
     expect(res.status).toBe(200);
@@ -508,7 +521,7 @@ describe('GET /api/dashboard/:orgSlug/environments', () => {
 
 describe('POST /api/dashboard/:orgSlug/environments', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments`, {
         method: 'POST',
@@ -558,7 +571,7 @@ describe('POST /api/dashboard/:orgSlug/environments', () => {
 
 describe('PATCH /api/dashboard/:orgSlug/environments/:id', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments/e1`, {
         method: 'PATCH',
@@ -604,7 +617,7 @@ describe('PATCH /api/dashboard/:orgSlug/environments/:id', () => {
 
 describe('DELETE /api/dashboard/:orgSlug/environments/:id', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments/e1`, { method: 'DELETE' }),
     );
@@ -638,7 +651,7 @@ describe('DELETE /api/dashboard/:orgSlug/environments/:id', () => {
 
 describe('POST /api/dashboard/:orgSlug/environments/:id/rotate-key', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments/e1/rotate-key`, { method: 'POST' }),
     );
@@ -674,7 +687,7 @@ describe('POST /api/dashboard/:orgSlug/environments/:id/rotate-key', () => {
 
 describe('GET /api/dashboard/:orgSlug/members', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(new Request(`${BASE}/members`));
     expect(res.status).toBe(403);
   });
@@ -696,7 +709,7 @@ describe('GET /api/dashboard/:orgSlug/members', () => {
 
 describe('PATCH /api/dashboard/:orgSlug/members/:userId', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/members/u1`, {
         method: 'PATCH',
@@ -776,7 +789,7 @@ describe('PATCH /api/dashboard/:orgSlug/members/:userId', () => {
 
 describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/members/u1`, { method: 'DELETE' }),
     );

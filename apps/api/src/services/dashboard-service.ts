@@ -2,8 +2,6 @@ import { LRUCache } from 'lru-cache';
 import type { DbClient } from '@vexillo/db';
 import {
   queryUserOrgs,
-  queryOrgBySlug,
-  queryUserOrgRole,
   queryOrgFlagsWithStates,
   insertFlag,
   backfillFlagStatesForFlag,
@@ -91,14 +89,7 @@ function slugify(name: string): string {
 
 export type OrgRow = typeof organizations.$inferSelect;
 
-export interface OrgContext {
-  org: OrgRow;
-  role: string | null; // null means org exists but user is not a member
-}
-
 export interface DashboardService {
-  // Org context resolution (used by middleware)
-  resolveOrgContext(slug: string, userId: string): Promise<OrgContext | null>;
   getMyOrgs(userId: string): Promise<{ id: string; name: string; slug: string }[]>;
 
   // Flags
@@ -154,20 +145,15 @@ export interface DashboardService {
 const TTL = 30_000;
 const MAX = 200;
 
-export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFlagChange, clearAuthCache?: ClearAuthCache): DashboardService {
+export type InvalidateMemberContext = (orgId: string, userId: string) => void;
+
+export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFlagChange, clearAuthCache?: ClearAuthCache, invalidateMemberContext?: InvalidateMemberContext): DashboardService {
   const flagsCache = new LRUCache<string, { flags: FlagWithStates[]; environments: EnvRef[] }>({ max: MAX, ttl: TTL });
   const envsCache = new LRUCache<string, EnvironmentWithKey[]>({ max: MAX, ttl: TTL });
   const membersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
   const removedMembersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
 
   return {
-    async resolveOrgContext(slug, userId) {
-      const org = await queryOrgBySlug(db, slug);
-      if (!org) return null;
-      const role = await queryUserOrgRole(db, org.id, userId);
-      return { org, role: role ?? null };
-    },
-
     async getMyOrgs(userId) {
       return queryUserOrgs(db, userId);
     },
@@ -338,6 +324,7 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       if (!updated) throw new NotFoundError('Member not found');
       await insertAuditLog(db, { orgId, actorId, action: 'member.update_role', targetType: 'member', targetId: userId, metadata: { role } });
       membersCache.delete(orgId);
+      invalidateMemberContext?.(orgId, userId);
       return { userId, role };
     },
 
@@ -357,6 +344,7 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       await insertAuditLog(db, { orgId, actorId, action: 'member.remove', targetType: 'member', targetId: userId });
       membersCache.delete(orgId);
       removedMembersCache.delete(orgId);
+      invalidateMemberContext?.(orgId, userId);
     },
 
     async restoreMember(orgId, actorId, userId) {
@@ -368,6 +356,7 @@ export function createDashboardService(db: DbClient, notifyFlagChange?: NotifyFl
       await insertAuditLog(db, { orgId, actorId, action: 'member.restore', targetType: 'member', targetId: userId });
       membersCache.delete(orgId);
       removedMembersCache.delete(orgId);
+      invalidateMemberContext?.(orgId, userId);
     },
 
   };

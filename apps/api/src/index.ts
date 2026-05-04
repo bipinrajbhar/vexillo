@@ -15,6 +15,7 @@ import { createAuthCache } from './lib/auth-cache';
 import { createSnapshotCache } from './lib/snapshot-cache';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
 import { createFlagChangeNotifier } from './lib/flag-change-notifier';
+import { createOrgContextResolver } from './lib/org-context-resolver';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -58,7 +59,14 @@ const notifyFlagChange = createFlagChangeNotifier({
   streamRegistry: redisClients ? undefined : streamRegistry,
 });
 
-const dashboardService = createDashboardService(db, notifyFlagChange, (environmentId) => authCache.deleteByEnvironmentId(environmentId));
+const orgContextResolver = createOrgContextResolver({ db });
+
+const dashboardService = createDashboardService(
+  db,
+  notifyFlagChange,
+  (environmentId) => authCache.deleteByEnvironmentId(environmentId),
+  (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
+);
 
 const app = new Hono();
 
@@ -113,7 +121,7 @@ app.get('/api/docs', Scalar({ url: '/api/openapi.json' }));
 // Dashboard routes — session auth required
 app.route(
   '/api/dashboard',
-  createDashboardRouter(dashboardService, (headers) => auth.api.getSession({ headers })),
+  createDashboardRouter(dashboardService, (headers) => auth.api.getSession({ headers }), orgContextResolver),
 );
 
 // Super-admin routes — isSuperAdmin required
