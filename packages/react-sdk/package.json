@@ -43,6 +43,6 @@
     "vitest": "^3"
   },
   "dependencies": {
-    "eventsource-parser": "^3.0.8"
+    "eventsource-client": "^1.2.0"
   }
 }

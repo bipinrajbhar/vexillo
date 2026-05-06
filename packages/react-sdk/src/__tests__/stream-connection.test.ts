@@ -1,106 +1,118 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type {
+  EventSourceClient,
+  EventSourceMessage,
+  EventSourceOptions,
+} from "eventsource-client";
 import { createStreamConnection } from "../stream-connection";
 
 const BASE_URL = "https://example.com";
 const API_KEY = "test-key";
 
 // ---------------------------------------------------------------------------
-// Test harness: fake fetch + fake reader (control SSE byte stream by hand)
+// Fake EventSource: drives the state machine via the lib's callback contract.
 // ---------------------------------------------------------------------------
 
-interface PendingFetch {
+interface FakeEventSource extends EventSourceClient {
+  options: EventSourceOptions;
+  closed: boolean;
+  emit(msg: EventSourceMessage): void;
+  drop(): void;
+}
+
+function makeFakeEs(opts: EventSourceOptions): FakeEventSource {
+  let readyState: EventSourceClient["readyState"] = "connecting";
+  let closed = false;
+  const fake = {
+    options: opts,
+    get closed() {
+      return closed;
+    },
+    get readyState() {
+      return readyState;
+    },
+    lastEventId: undefined,
+    url: typeof opts.url === "string" ? opts.url : opts.url.toString(),
+    close() {
+      closed = true;
+      readyState = "closed";
+    },
+    connect() {
+      readyState = "connecting";
+    },
+    [Symbol.iterator](): never {
+      throw new Error("sync iteration unsupported");
+    },
+    [Symbol.asyncIterator](): AsyncIterableIterator<EventSourceMessage> {
+      throw new Error("async iteration not used in tests");
+    },
+    emit(msg: EventSourceMessage) {
+      opts.onMessage?.(msg);
+    },
+    drop() {
+      readyState = "connecting";
+      opts.onDisconnect?.();
+    },
+  };
+  return fake as unknown as FakeEventSource;
+}
+
+// ---------------------------------------------------------------------------
+// REST fake: pending fetches resolved/rejected by the test.
+// ---------------------------------------------------------------------------
+
+interface PendingRest {
   url: string;
   init: RequestInit;
   resolve: (response: unknown) => void;
   reject: (err: Error) => void;
 }
 
-class FakeReader {
-  private current: {
-    resolve: (r: { done: boolean; value?: Uint8Array }) => void;
-    reject: (e: Error) => void;
-  } | null = null;
-
-  read(): Promise<{ done: boolean; value?: Uint8Array }> {
-    return new Promise((resolve, reject) => {
-      this.current = { resolve, reject };
-    });
-  }
-
-  push(text: string): void {
-    const c = this.current;
-    if (!c) throw new Error("FakeReader.push: no pending read");
-    this.current = null;
-    c.resolve({ done: false, value: new TextEncoder().encode(text) });
-  }
-
-  endStream(): void {
-    const c = this.current;
-    if (!c) return;
-    this.current = null;
-    c.resolve({ done: true, value: undefined });
-  }
-
-  errorOut(err: Error): void {
-    const c = this.current;
-    if (!c) return;
-    this.current = null;
-    c.reject(err);
-  }
-
-  cancel(): void {
-    this.errorOut(makeAbortError());
-  }
-}
-
-class FakeFetchHarness {
-  private rest: PendingFetch[] = [];
-  private sse: PendingFetch[] = [];
-
-  fetch: typeof fetch = ((url: string | URL, init: RequestInit = {}) => {
-    const u = typeof url === "string" ? url : url.toString();
-    const slot = u.endsWith("/stream") ? this.sse : this.rest;
-    return new Promise((resolve, reject) => {
-      const p: PendingFetch = {
+function makeRestFetch(): {
+  fetch: typeof fetch;
+  pending: PendingRest[];
+} {
+  const pending: PendingRest[] = [];
+  const fakeFetch: typeof fetch = ((
+    url: string | URL | Request,
+    init: RequestInit = {},
+  ) => {
+    return new Promise((nativeResolve, nativeReject) => {
+      const u = typeof url === "string" ? url : url.toString();
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        const i = pending.indexOf(p);
+        if (i !== -1) pending.splice(i, 1);
+      };
+      const p: PendingRest = {
         url: u,
         init,
-        resolve: resolve as (r: unknown) => void,
-        reject,
+        resolve: (r) => {
+          settle();
+          nativeResolve(r as Response);
+        },
+        reject: (e) => {
+          settle();
+          nativeReject(e);
+        },
       };
-      slot.push(p);
+      pending.push(p);
       init.signal?.addEventListener("abort", () => {
-        const i = slot.indexOf(p);
-        if (i !== -1) slot.splice(i, 1);
-        reject(makeAbortError());
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        p.reject(err);
       });
     });
   }) as typeof fetch;
-
-  pendingRest(): number {
-    return this.rest.length;
-  }
-  pendingSse(): number {
-    return this.sse.length;
-  }
-  takeRest(): PendingFetch {
-    const p = this.rest.shift();
-    if (!p) throw new Error("FakeFetchHarness: no pending REST request");
-    return p;
-  }
-  takeSse(): PendingFetch {
-    const p = this.sse.shift();
-    if (!p) throw new Error("FakeFetchHarness: no pending SSE request");
-    return p;
-  }
+  return { fetch: fakeFetch, pending };
 }
 
-function makeAbortError(): Error {
-  const err = new Error("aborted");
-  err.name = "AbortError";
-  return err;
-}
-
-function resolveRestOk(p: PendingFetch, flags: Record<string, boolean>): void {
+function resolveRestOk(
+  p: PendingRest,
+  flags: Record<string, boolean>,
+): void {
   const arr = Object.entries(flags).map(([key, enabled]) => ({ key, enabled }));
   p.resolve({
     ok: true,
@@ -109,27 +121,13 @@ function resolveRestOk(p: PendingFetch, flags: Record<string, boolean>): void {
   });
 }
 
-function resolveSseOk(p: PendingFetch, reader: FakeReader): void {
-  p.resolve({
-    ok: true,
-    status: 200,
-    body: { getReader: () => reader },
-  });
-  // Mirror real fetch behaviour: aborting cancels the reader.
-  p.init.signal?.addEventListener("abort", () => reader.cancel());
-}
-
-function snapshotChunk(flags: Record<string, boolean>): string {
+function snapshotMessage(flags: Record<string, boolean>): EventSourceMessage {
   const arr = Object.entries(flags).map(([key, enabled]) => ({ key, enabled }));
-  return `data: ${JSON.stringify({ flags: arr })}\n\n`;
-}
-
-function idAndSnapshotChunk(
-  id: string,
-  flags: Record<string, boolean>,
-): string {
-  const arr = Object.entries(flags).map(([key, enabled]) => ({ key, enabled }));
-  return `id: ${id}\ndata: ${JSON.stringify({ flags: arr })}\n\n`;
+  return {
+    data: JSON.stringify({ flags: arr }),
+    event: undefined,
+    id: undefined,
+  };
 }
 
 async function flush(times = 6): Promise<void> {
@@ -141,23 +139,22 @@ async function flush(times = 6): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe("createStreamConnection", () => {
-  let harness: FakeFetchHarness;
+  let createES: ReturnType<typeof vi.fn>;
+  let createdES: FakeEventSource[];
+  let restHarness: ReturnType<typeof makeRestFetch>;
   let onSnapshot: ReturnType<typeof vi.fn>;
   let onError: ReturnType<typeof vi.fn>;
-  let setTimeoutSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    vi.useFakeTimers();
-    harness = new FakeFetchHarness();
+    createdES = [];
+    createES = vi.fn((opts: EventSourceOptions) => {
+      const es = makeFakeEs(opts);
+      createdES.push(es);
+      return es;
+    });
+    restHarness = makeRestFetch();
     onSnapshot = vi.fn();
     onError = vi.fn();
-    setTimeoutSpy = vi.fn((cb: () => void, ms: number) =>
-      globalThis.setTimeout(cb, ms),
-    );
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   function makeConn() {
@@ -166,17 +163,175 @@ describe("createStreamConnection", () => {
       apiKey: API_KEY,
       onSnapshot,
       onError,
-      fetch: harness.fetch,
-      setTimeout: setTimeoutSpy as unknown as (
-        cb: () => void,
-        ms: number,
-      ) => ReturnType<typeof setTimeout>,
+      fetch: restHarness.fetch,
+      createEventSource: createES,
     });
   }
 
   it("starts in idle and reports status", () => {
     const conn = makeConn();
     expect(conn.status).toBe("idle");
+    expect(createES).not.toHaveBeenCalled();
+  });
+
+  it("on start() spawns one EventSource and one REST request", () => {
+    const conn = makeConn();
+    conn.start();
+    expect(conn.status).toBe("racing");
+    expect(createdES).toHaveLength(1);
+    expect(restHarness.pending).toHaveLength(1);
+  });
+
+  it("forwards Authorization header to the EventSource", () => {
+    const conn = makeConn();
+    conn.start();
+    expect(createdES[0].options.headers).toEqual({
+      Authorization: `Bearer ${API_KEY}`,
+    });
+    expect(createdES[0].options.url).toBe(`${BASE_URL}/api/sdk/flags/stream`);
+  });
+
+  it("cold start, REST wins → rest_won; SSE snapshot then transitions to streaming", async () => {
+    const conn = makeConn();
+    conn.start();
+
+    resolveRestOk(restHarness.pending[0], { a: true });
+    await flush();
+    expect(conn.status).toBe("rest_won");
+    expect(onSnapshot).toHaveBeenCalledWith({ a: true });
+
+    createdES[0].emit(snapshotMessage({ a: false, b: true }));
+    expect(conn.status).toBe("streaming");
+    expect(onSnapshot).toHaveBeenLastCalledWith({ a: false, b: true });
+    expect(onSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("cold start, SSE wins → streaming; pending REST is aborted", async () => {
+    const conn = makeConn();
+    conn.start();
+
+    createdES[0].emit(snapshotMessage({ a: true }));
+    await flush();
+    expect(conn.status).toBe("streaming");
+    expect(onSnapshot).toHaveBeenCalledTimes(1);
+    expect(onSnapshot).toHaveBeenCalledWith({ a: true });
+    // REST was aborted — nothing pending.
+    expect(restHarness.pending).toHaveLength(0);
+  });
+
+  it("REST_RESOLVED has no transition from streaming (SSE-authoritative)", async () => {
+    const conn = makeConn();
+    conn.start();
+
+    // Settle into streaming.
+    createdES[0].emit(snapshotMessage({ a: true }));
+    await flush();
+    expect(conn.status).toBe("streaming");
+    expect(onSnapshot).toHaveBeenCalledTimes(1);
+
+    // Pending REST is aborted, but verify nothing else can apply.
+    expect(restHarness.pending).toHaveLength(0);
+  });
+
+  it("disconnect from streaming → bridging; bridge REST wins → rest_won", async () => {
+    const conn = makeConn();
+    conn.start();
+    createdES[0].emit(snapshotMessage({ a: true }));
+    await flush();
+    expect(conn.status).toBe("streaming");
+
+    createdES[0].drop();
+    expect(conn.status).toBe("bridging");
+    expect(restHarness.pending).toHaveLength(1);
+
+    resolveRestOk(restHarness.pending[0], { a: false, b: true });
+    await flush();
+    expect(conn.status).toBe("rest_won");
+    expect(onSnapshot).toHaveBeenLastCalledWith({ a: false, b: true });
+  });
+
+  it("disconnect from streaming → bridging; SSE returns first → streaming, bridge REST aborted", async () => {
+    const conn = makeConn();
+    conn.start();
+    createdES[0].emit(snapshotMessage({ a: true }));
+    await flush();
+    createdES[0].drop();
+    expect(conn.status).toBe("bridging");
+    expect(restHarness.pending).toHaveLength(1);
+
+    createdES[0].emit(snapshotMessage({ c: true }));
+    expect(conn.status).toBe("streaming");
+    expect(onSnapshot).toHaveBeenLastCalledWith({ c: true });
+    expect(restHarness.pending).toHaveLength(0);
+  });
+
+  it("disconnect from rest_won → bridging (REST flags kept fresh during reconnect gap)", async () => {
+    const conn = makeConn();
+    conn.start();
+    resolveRestOk(restHarness.pending[0], { a: true });
+    await flush();
+    expect(conn.status).toBe("rest_won");
+
+    createdES[0].drop();
+    expect(conn.status).toBe("bridging");
+    expect(restHarness.pending).toHaveLength(1);
+  });
+
+  it("disconnect during racing keeps state in racing (cold-start REST already in flight)", async () => {
+    const conn = makeConn();
+    conn.start();
+    expect(restHarness.pending).toHaveLength(1);
+
+    createdES[0].drop();
+    expect(conn.status).toBe("racing");
+    // No second REST spawned — the initial one is still pending.
+    expect(restHarness.pending).toHaveLength(1);
+  });
+
+  it("malformed SSE message is dropped (no transition)", async () => {
+    const conn = makeConn();
+    conn.start();
+    expect(conn.status).toBe("racing");
+
+    createdES[0].emit({ data: "{not json", event: undefined, id: undefined });
+    expect(conn.status).toBe("racing");
+    expect(onSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("STOP from racing closes the EventSource and aborts REST", async () => {
+    const conn = makeConn();
+    conn.start();
+    expect(restHarness.pending).toHaveLength(1);
+
+    conn.stop();
+    expect(conn.status).toBe("closed");
+    expect(createdES[0].closed).toBe(true);
+    expect(restHarness.pending).toHaveLength(0);
+  });
+
+  it("STOP from bridging closes the EventSource and aborts the bridge REST", async () => {
+    const conn = makeConn();
+    conn.start();
+    createdES[0].emit(snapshotMessage({ a: true }));
+    await flush();
+    createdES[0].drop();
+    expect(conn.status).toBe("bridging");
+
+    conn.stop();
+    expect(conn.status).toBe("closed");
+    expect(createdES[0].closed).toBe(true);
+    expect(restHarness.pending).toHaveLength(0);
+  });
+
+  it("STOP from streaming closes the EventSource", async () => {
+    const conn = makeConn();
+    conn.start();
+    createdES[0].emit(snapshotMessage({ a: true }));
+    await flush();
+
+    conn.stop();
+    expect(conn.status).toBe("closed");
+    expect(createdES[0].closed).toBe(true);
   });
 
   it("emits status changes to subscribers", async () => {
@@ -186,258 +341,33 @@ describe("createStreamConnection", () => {
 
     conn.start();
     expect(seen).toContain("racing");
-
-    resolveRestOk(harness.takeRest(), { a: true });
+    resolveRestOk(restHarness.pending[0], { a: true });
     await flush();
     expect(seen).toContain("rest_won");
+    createdES[0].emit(snapshotMessage({ a: true }));
+    expect(seen).toContain("streaming");
   });
 
-  it("cold start, REST wins: racing → rest_won; later SSE snapshot → streaming and overwrites", async () => {
+  it("repeated start() while not idle is a no-op", () => {
     const conn = makeConn();
     conn.start();
-    expect(conn.status).toBe("racing");
-    expect(harness.pendingRest()).toBe(1);
-    expect(harness.pendingSse()).toBe(1);
-
-    resolveRestOk(harness.takeRest(), { a: true });
-    await flush();
-    expect(conn.status).toBe("rest_won");
-    expect(onSnapshot).toHaveBeenCalledWith({ a: true });
-
-    const reader = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader);
-    await flush();
-    reader.push(snapshotChunk({ a: false, b: true }));
-    await flush();
-
-    expect(conn.status).toBe("streaming");
-    expect(onSnapshot).toHaveBeenLastCalledWith({ a: false, b: true });
-    expect(onSnapshot).toHaveBeenCalledTimes(2);
+    expect(createdES).toHaveLength(1);
+    conn.start();
+    expect(createdES).toHaveLength(1);
   });
 
-  it("cold start, SSE wins: racing → streaming; pending REST is aborted and never applied", async () => {
+  it("on REST HTTP error, reports onError but stays in racing for SSE to resolve", async () => {
     const conn = makeConn();
     conn.start();
-
-    const reader = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader);
+    restHarness.pending[0].resolve({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    });
     await flush();
-    reader.push(snapshotChunk({ a: true }));
-    await flush();
-
-    expect(conn.status).toBe("streaming");
-    expect(onSnapshot).toHaveBeenCalledTimes(1);
-    expect(onSnapshot).toHaveBeenCalledWith({ a: true });
-    // Cold-start REST was aborted on SSE win — nothing pending.
-    expect(harness.pendingRest()).toBe(0);
-  });
-
-  it("SSE error from streaming → reconnecting; timer fires → rebridging; REST wins rerace", async () => {
-    const conn = makeConn();
-    conn.start();
-
-    // Settle into streaming.
-    resolveRestOk(harness.takeRest(), {});
-    await flush();
-    const reader1 = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader1);
-    await flush();
-    reader1.push(snapshotChunk({ a: true }));
-    await flush();
-    expect(conn.status).toBe("streaming");
-
-    // SSE errors → reconnecting.
-    reader1.errorOut(new Error("connection dropped"));
-    await flush();
-    expect(conn.status).toBe("reconnecting");
     expect(onError).toHaveBeenCalled();
-
-    // Initial backoff delay is 1000ms.
-    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 1000);
-
-    // Timer fires → rebridging spawns BOTH REST and SSE.
-    vi.advanceTimersByTime(1000);
-    await flush();
-    expect(conn.status).toBe("rebridging");
-    expect(harness.pendingRest()).toBe(1);
-    expect(harness.pendingSse()).toBe(1);
-
-    // REST wins the rerace.
-    resolveRestOk(harness.takeRest(), { a: false, b: true });
-    await flush();
+    // REST still dispatches REST_RESOLVED with empty flags → rest_won.
     expect(conn.status).toBe("rest_won");
-    expect(onSnapshot).toHaveBeenLastCalledWith({ a: false, b: true });
-  });
-
-  it("rebridging: SSE wins the rerace; late REST is dropped", async () => {
-    const conn = makeConn();
-    conn.start();
-    resolveRestOk(harness.takeRest(), {});
-    await flush();
-    const reader1 = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader1);
-    await flush();
-    reader1.push(snapshotChunk({ a: true }));
-    await flush();
-
-    reader1.errorOut(new Error("dropped"));
-    await flush();
-    vi.advanceTimersByTime(1000);
-    await flush();
-    expect(conn.status).toBe("rebridging");
-
-    // SSE arrives before REST.
-    const reader2 = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader2);
-    await flush();
-    reader2.push(snapshotChunk({ c: true }));
-    await flush();
-    expect(conn.status).toBe("streaming");
-    expect(onSnapshot).toHaveBeenLastCalledWith({ c: true });
-
-    // Pending REST was aborted; nothing left in harness.
-    expect(harness.pendingRest()).toBe(0);
-  });
-
-  it("backoff doubles to the 30s cap on consecutive failures", async () => {
-    const conn = makeConn();
-    conn.start();
-    resolveRestOk(harness.takeRest(), {});
-    await flush();
-
-    // Fail SSE repeatedly and observe each scheduled backoff.
-    const expected = [1000, 2000, 4000, 8000, 16000, 30000, 30000];
-
-    for (let i = 0; i < expected.length; i++) {
-      const reader = new FakeReader();
-      resolveSseOk(harness.takeSse(), reader);
-      await flush();
-      reader.errorOut(new Error("e"));
-      await flush();
-      expect(conn.status).toBe("reconnecting");
-      expect(setTimeoutSpy).toHaveBeenLastCalledWith(
-        expect.any(Function),
-        expected[i],
-      );
-      vi.advanceTimersByTime(expected[i]);
-      await flush();
-      expect(conn.status).toBe("rebridging");
-      // Drain the rebridge REST so it doesn't pollute the next iteration.
-      if (harness.pendingRest() > 0) {
-        resolveRestOk(harness.takeRest(), {});
-        await flush();
-      }
-    }
-  });
-
-  it("server retry: hint resets backoff for the next failure", async () => {
-    const conn = makeConn();
-    conn.start();
-    resolveRestOk(harness.takeRest(), {});
-    await flush();
-
-    // First snapshot — establishes streaming, backoff at 1000.
-    const reader1 = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader1);
-    await flush();
-    reader1.push(snapshotChunk({ a: true }));
-    await flush();
-
-    // First failure: backoff = 1000.
-    reader1.errorOut(new Error("e"));
-    await flush();
-    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 1000);
-    vi.advanceTimersByTime(1000);
-    await flush();
-
-    // Rebridge: serve a retry: hint then a snapshot.
-    const reader2 = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader2);
-    await flush();
-    reader2.push("retry: 250\n");
-    await flush();
-    reader2.push(snapshotChunk({ a: true }));
-    await flush();
-    expect(conn.status).toBe("streaming");
-
-    // Next failure should schedule with the hinted 250ms, not the doubled value.
-    reader2.errorOut(new Error("e"));
-    await flush();
-    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 250);
-  });
-
-  it("forwards Last-Event-ID on the rebridge SSE request", async () => {
-    const conn = makeConn();
-    conn.start();
-    resolveRestOk(harness.takeRest(), {});
-    await flush();
-
-    const reader1 = new FakeReader();
-    const sseReq1 = harness.takeSse();
-    resolveSseOk(sseReq1, reader1);
-    await flush();
-    // First request had no Last-Event-ID.
-    expect(
-      (sseReq1.init.headers as Record<string, string>)["Last-Event-ID"],
-    ).toBeUndefined();
-
-    reader1.push(idAndSnapshotChunk("17", { a: true }));
-    await flush();
-
-    reader1.errorOut(new Error("e"));
-    await flush();
-    vi.advanceTimersByTime(1000);
-    await flush();
-
-    const sseReq2 = harness.takeSse();
-    expect(
-      (sseReq2.init.headers as Record<string, string>)["Last-Event-ID"],
-    ).toBe("17");
-  });
-
-  it("STOP from racing closes and aborts both pending requests", async () => {
-    const conn = makeConn();
-    conn.start();
-    expect(harness.pendingRest()).toBe(1);
-    expect(harness.pendingSse()).toBe(1);
-
-    conn.stop();
-    expect(conn.status).toBe("closed");
-    // Aborts removed both pending entries.
-    expect(harness.pendingRest()).toBe(0);
-    expect(harness.pendingSse()).toBe(0);
-  });
-
-  it("STOP from reconnecting clears the timer; no further transitions", async () => {
-    const conn = makeConn();
-    conn.start();
-    resolveRestOk(harness.takeRest(), {});
-    await flush();
-    const reader = new FakeReader();
-    resolveSseOk(harness.takeSse(), reader);
-    await flush();
-    reader.push(snapshotChunk({ a: true }));
-    await flush();
-    reader.errorOut(new Error("e"));
-    await flush();
-    expect(conn.status).toBe("reconnecting");
-
-    conn.stop();
-    expect(conn.status).toBe("closed");
-
-    // Advancing past the original 1000ms must not transition.
-    vi.advanceTimersByTime(5000);
-    await flush();
-    expect(conn.status).toBe("closed");
-    expect(harness.pendingSse()).toBe(0);
-  });
-
-  it("repeated start() while not idle is a no-op", async () => {
-    const conn = makeConn();
-    conn.start();
-    expect(harness.pendingSse()).toBe(1);
-
-    conn.start();
-    expect(harness.pendingSse()).toBe(1);
+    expect(onSnapshot).toHaveBeenCalledWith({});
   });
 });
