@@ -366,8 +366,27 @@ describe("createStreamConnection", () => {
     });
     await flush();
     expect(onError).toHaveBeenCalled();
-    // REST still dispatches REST_RESOLVED with empty flags → rest_won.
-    expect(conn.status).toBe("rest_won");
-    expect(onSnapshot).toHaveBeenCalledWith({});
+    // REST failure no longer overwrites with empty flags — fresh streaming
+    // data must not be clobbered by a 500 from a bridge REST.
+    expect(conn.status).toBe("racing");
+    expect(onSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("a listener that calls stop() during onSnapshot does not get clobbered by re-entrant dispatch", async () => {
+    const conn = makeConn();
+    conn.subscribe(() => {});
+    onSnapshot.mockImplementation(() => {
+      // First snapshot from REST triggers a synchronous stop.
+      if (conn.status !== "closed") conn.stop();
+    });
+
+    conn.start();
+    resolveRestOk(restHarness.pending[0], { a: true });
+    await flush();
+
+    // Without the re-entrancy queue, the outer reduce would overwrite
+    // 'closed' with 'rest_won'. With it, stop wins.
+    expect(conn.status).toBe("closed");
+    expect(createdES[0].closed).toBe(true);
   });
 });
