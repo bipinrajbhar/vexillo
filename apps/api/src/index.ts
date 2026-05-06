@@ -3,6 +3,8 @@ import { secureHeaders } from 'hono/secure-headers';
 import { Scalar } from '@scalar/hono-api-reference';
 import { createDbClient } from '@vexillo/db';
 import { createSdkRouter, SDK_OPENAPI_CONFIG } from './routes/sdk';
+import { createSdkAuthenticator } from './lib/sdk-authenticator';
+import { createFlagSnapshotReader } from './lib/flag-snapshot-reader';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
@@ -10,7 +12,6 @@ import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
 import { createDashboardService, createServiceEffects, createServiceCaches } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
-import { createAuthCache } from './lib/auth-cache';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
 import {
   createFlagBus,
@@ -26,8 +27,6 @@ if (!DATABASE_URL) {
 
 const db = createDbClient(DATABASE_URL, { max: 10 });
 const auth = createAuth(db);
-
-const authCache = createAuthCache();
 
 // Optional Redis: enables cross-container SSE fan-out. Omit REDIS_URL to run
 // single-container (stream still works; toggles reach only local connections).
@@ -60,10 +59,16 @@ const flagBus = createFlagBus({
 
 const orgContextResolver = createOrgContextResolver({ db });
 
+// SDK request pipeline: SdkAuthenticator owns the auth+origin gate (3-table
+// join + LRU + SWR), FlagSnapshotReader owns the snapshot fetch+evaluate path.
+// The route composes them and never sees `allowedOrigins` or raw flag rows.
+const sdkAuthenticator = createSdkAuthenticator({ db });
+const flagSnapshotReader = createFlagSnapshotReader({ db, flagBus });
+
 const serviceCaches = createServiceCaches();
 const serviceEffects = createServiceEffects(db, serviceCaches, {
   publishLocal: (envId, payload) => flagBus.publishLocal(envId, payload),
-  clearAuthCache: (environmentId) => authCache.deleteByEnvironmentId(environmentId),
+  clearAuthCache: (environmentId) => sdkAuthenticator.evictByEnvironment(environmentId),
   invalidateMemberContext: (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
 });
 const dashboardService = createDashboardService(db, serviceEffects, serviceCaches);
@@ -107,7 +112,11 @@ app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable
-const sdkRouter = createSdkRouter(db, flagBus, authCache);
+const sdkRouter = createSdkRouter({
+  authenticator: sdkAuthenticator,
+  snapshotReader: flagSnapshotReader,
+  flagBus,
+});
 app.route('/api/sdk', sdkRouter);
 
 // OpenAPI spec + interactive docs (unauthenticated; internal use only)
