@@ -1,4 +1,5 @@
 import { fetchFlags } from "./fetch-flags";
+import { createStreamConnection } from "./stream-connection";
 
 export interface VexilloClientConfig {
   baseUrl: string;
@@ -147,120 +148,22 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
   }
 
   function connectStream(): () => void {
-    let active = true;
-    let abortController: AbortController | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    // Survive reconnects: server controls retryMs via the SSE retry: field.
-    let lastEventId: string | null = null;
-    let retryMs = 1000;
-    let backoffMs = retryMs;
-    let bootstrapped = false;
-
-    async function fetchRest(): Promise<void> {
-      try {
-        const flags = await fetchFlags(baseUrl, apiKey);
-        if (!active || bootstrapped) return;
+    const conn = createStreamConnection({
+      baseUrl,
+      apiKey,
+      onSnapshot: (flags) => {
         remoteFlags = flags;
         error = null;
         ready = true;
-        bootstrapped = true;
         notifyAll();
-      } catch {
-        // non-fatal: stream will deliver the initial snapshot shortly
-      }
-    }
-
-    async function attempt(): Promise<void> {
-      if (!active) return;
-
-      abortController = new AbortController();
-      try {
-        const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
-        if (lastEventId !== null) headers['Last-Event-ID'] = lastEventId;
-
-        const res = await fetch(`${baseUrl}/api/sdk/flags/stream`, {
-          headers,
-          signal: abortController.signal,
-        });
-
-        if (!res.ok || !res.body) {
-          throw new Error(`SSE: ${res.status}`);
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-
-        while (active) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? '';
-
-          for (const line of lines) {
-            if (line.startsWith('id: ')) {
-              lastEventId = line.slice(4).trim();
-            } else if (line.startsWith('retry: ')) {
-              const ms = parseInt(line.slice(7), 10);
-              if (!isNaN(ms)) {
-                retryMs = ms;
-                backoffMs = ms;
-              }
-            } else if (line.startsWith('data: ')) {
-              try {
-                const parsed = JSON.parse(line.slice(6)) as {
-                  flags: Array<{ key: string; enabled: boolean }>;
-                };
-                const next: Record<string, boolean> = {};
-                for (const f of parsed.flags) next[f.key] = f.enabled;
-                remoteFlags = next;
-                error = null;
-                ready = true;
-                bootstrapped = true;
-                backoffMs = retryMs;
-                notifyAll();
-              } catch {
-                // ignore malformed SSE events
-              }
-            }
-            // lines starting with ':' are comments (keepalive), skip
-          }
-        }
-      } catch (err) {
-        if (!active) return;
-        if (err instanceof Error && err.name === 'AbortError') return;
-        error = err instanceof Error ? err : new Error(String(err));
-        onError?.(error);
-      }
-
-      if (!active) return;
-      reconnectTimer = setTimeout(() => {
-        backoffMs = Math.min(backoffMs * 2, 30_000);
-        // Fetch via REST while SSE reconnects so flags stay current during the
-        // gap. Resetting bootstrapped lets fetchRest() apply the result; if SSE
-        // reconnects first it sets bootstrapped=true and the REST response is
-        // ignored, preventing a stale overwrite.
-        bootstrapped = false;
-        void fetchRest();
-        void attempt();
-      }, backoffMs);
-    }
-
-    // Race REST and SSE — whichever delivers first sets isReady.
-    // SSE stays open and remains authoritative for all subsequent updates.
-    void fetchRest();
-    void attempt();
-
-    return () => {
-      active = false;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      abortController?.abort();
-    };
+      },
+      onError: (err) => {
+        error = err;
+        onError?.(err);
+      },
+    });
+    conn.start();
+    return () => conn.stop();
   }
 
   return {
