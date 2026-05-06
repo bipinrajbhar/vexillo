@@ -8,11 +8,9 @@ export interface MockVexilloClientOptions {
 }
 
 /**
- * Creates a VexilloClient pre-seeded with the given flags.
- *
- * - `isReady` is `true` immediately — no network call.
- * - `load()` is a no-op.
- * - `override()` works normally — useful for per-test overrides.
+ * Creates a VexilloClient pre-seeded with the given flags. `start()` and
+ * `refresh()` are no-ops so component tests don't need a real server or any
+ * fake-fetch wiring.
  *
  * ```tsx
  * const client = createMockVexilloClient({ flags: { newCheckout: true } });
@@ -33,7 +31,7 @@ export function createMockVexilloClient(
     initialFlags: options.flags ?? {},
     fallbacks: options.fallbacks ?? {},
   });
-  // Override connectStream with a no-op so component tests don't need a real server.
-  client.connectStream = () => () => {};
+  client.start = () => () => {};
+  client.refresh = async () => {};
   return client;
 }
