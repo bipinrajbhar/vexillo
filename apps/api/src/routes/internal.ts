@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { FlagBus } from '../lib/flag-bus';
+import type { FlagSnapshotWriter } from '../lib/flag-snapshots';
 
-export function createInternalRouter(flagBus: FlagBus, secret: string) {
+export function createInternalRouter(writer: FlagSnapshotWriter, secret: string) {
   const app = new Hono();
 
   app.post('/flag-change', async (c) => {
@@ -28,7 +28,7 @@ export function createInternalRouter(flagBus: FlagBus, secret: string) {
 
     const { envId, payload } = body as { envId: string; payload: string };
 
-    flagBus.ingestRemote(envId, payload);
+    writer.ingestRemote(envId, payload);
 
     return c.json({ ok: true });
   });

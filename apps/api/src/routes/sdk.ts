@@ -1,7 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { SdkAuthenticator, AuthRejectReason } from '../lib/sdk-authenticator';
-import type { FlagSnapshotReader } from '../lib/flag-snapshot-reader';
-import type { FlagBus } from '../lib/flag-bus';
+import type { FlagSnapshotReader } from '../lib/flag-snapshots';
 
 // CORS headers for pre-auth error responses (401, env-not-found 403). We use
 // '*' here because we don't yet know the environment's allowedOrigins, but
@@ -89,13 +88,12 @@ const getFlagsRoute = createRoute({
 
 export function createSdkRouter(deps: {
   authenticator: SdkAuthenticator;
+  // The route owns the SSE transport (TransformStream, keepalive, abort) and
+  // delegates everything flag-shaped — cold-miss DB load, cache, country
+  // evaluation, listener registration — to the reader's openSession().
   snapshotReader: FlagSnapshotReader;
-  // The bus's listener registry stays at the route boundary — the route owns
-  // the SSE lifecycle (TransformStream, keepalive, abort) and delegates only
-  // evaluation to the reader.
-  flagBus: FlagBus;
 }) {
-  const { authenticator, snapshotReader, flagBus } = deps;
+  const { authenticator, snapshotReader } = deps;
 
   const sdk = new OpenAPIHono();
 
@@ -154,7 +152,7 @@ export function createSdkRouter(deps: {
     }
 
     // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
-    const evaluated = await snapshotReader.read({
+    const evaluated = await snapshotReader.serve({
       orgId: auth.orgId,
       environmentId: auth.environmentId,
       countryCode: c.req.header('cloudfront-viewer-country') ?? null,
@@ -177,10 +175,6 @@ export function createSdkRouter(deps: {
 
     // Capture viewer country at connection time for per-connection geo evaluation.
     const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
-    const evaluate = await snapshotReader.openEvaluator({
-      orgId: auth.orgId,
-      environmentId: auth.environmentId,
-    });
 
     const encoder = new TextEncoder();
 
@@ -193,7 +187,7 @@ export function createSdkRouter(deps: {
     const tsReader = readable.getReader();
 
     let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
-    let unregisterStream: (() => void) | undefined;
+    let closeSession: (() => void) | undefined;
     let closed = false;
     let eventId = 1;
 
@@ -215,7 +209,7 @@ export function createSdkRouter(deps: {
       if (closed) return;
       closed = true;
       clearInterval(keepaliveInterval);
-      unregisterStream?.();
+      closeSession?.();
       writer.close().catch(() => {});
     }
 
@@ -227,15 +221,19 @@ export function createSdkRouter(deps: {
       cancel: cleanup,
     });
 
+    const session = await snapshotReader.openSession({
+      orgId: auth.orgId,
+      environmentId: auth.environmentId,
+      countryCode,
+      onFrame: (evaluatedJson) => {
+        writer.write(buildEvent(evaluatedJson)).catch(() => {});
+      },
+    });
+    closeSession = session.close;
+
     // Send initial snapshot with retry hint so clients know the preferred
     // reconnect delay without waiting for a failed attempt.
-    await writer.write(buildEvent(evaluate(countryCode), 1000));
-
-    unregisterStream = flagBus.registerListener(auth.environmentId, (rawPayload) => {
-      // Each connection evaluates geo independently so different viewer
-      // countries see the correct enabled state for their location.
-      writer.write(buildEvent(evaluate(countryCode, rawPayload))).catch(() => {});
-    });
+    await writer.write(buildEvent(session.initialFrame, 1000));
 
     keepaliveInterval = setInterval(() => {
       writer.write(encoder.encode(': keepalive\n\n')).catch(() => {});

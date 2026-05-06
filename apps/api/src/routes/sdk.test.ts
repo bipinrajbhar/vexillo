@@ -3,9 +3,8 @@ import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { Scalar } from '@scalar/hono-api-reference';
 import { createSdkRouter, SDK_OPENAPI_CONFIG } from './sdk';
-import { createFlagBus, createInMemoryInterContainerBus, type FlagBus } from '../lib/flag-bus';
 import type { AuthResult, SdkAuthenticator } from '../lib/sdk-authenticator';
-import type { FlagSnapshotReader, FlagEvaluator } from '../lib/flag-snapshot-reader';
+import type { FlagSnapshotReader } from '../lib/flag-snapshots';
 
 // ── Stubs ─────────────────────────────────────────────────────────────────────
 //
@@ -13,7 +12,7 @@ import type { FlagSnapshotReader, FlagEvaluator } from '../lib/flag-snapshot-rea
 // union and the FlagSnapshotReader interface. These stubs let us exercise the
 // HTTP plumbing without touching the DB or auth caches — orchestration logic
 // is covered by the boundary tests in `lib/sdk-authenticator.test.ts` and
-// `lib/flag-snapshot-reader.test.ts`.
+// `lib/flag-snapshots/flag-snapshots.test.ts`.
 
 function stubAuthenticator(result: AuthResult): SdkAuthenticator {
   return {
@@ -22,24 +21,37 @@ function stubAuthenticator(result: AuthResult): SdkAuthenticator {
   };
 }
 
+type SessionHook = {
+  pushFrame: (json: string) => void;
+  closeCalls: number;
+};
+
 function stubReader(opts: {
-  read?: (countryCode: string | null) => string;
-  evaluator?: FlagEvaluator;
+  serve?: (countryCode: string | null) => string;
+  initialFrameFor?: (countryCode: string | null) => string;
+  sessionHook?: SessionHook;
 } = {}): FlagSnapshotReader {
-  const read = opts.read ?? (() => JSON.stringify({ flags: [] }));
-  const evaluator =
-    opts.evaluator ?? ((countryCode, override) => override ?? read(countryCode));
+  const serve = opts.serve ?? (() => JSON.stringify({ flags: [] }));
+  const initialFrameFor = opts.initialFrameFor ?? serve;
   return {
-    read: async (args) => read(args.countryCode),
-    openEvaluator: async () => evaluator,
-    invalidate: () => {},
+    serve: async (args) => serve(args.countryCode),
+    openSession: async ({ countryCode, onFrame }) => {
+      if (opts.sessionHook) {
+        opts.sessionHook.pushFrame = onFrame;
+      }
+      return {
+        initialFrame: initialFrameFor(countryCode),
+        close: () => {
+          if (opts.sessionHook) opts.sessionHook.closeCalls++;
+        },
+      };
+    },
   };
 }
 
 function makeApp(deps: {
   authenticator: SdkAuthenticator;
   snapshotReader?: FlagSnapshotReader;
-  flagBus?: FlagBus;
 }) {
   const app = new Hono();
   app.get('/health', (c) => c.json({ status: 'ok' }));
@@ -48,12 +60,6 @@ function makeApp(deps: {
     createSdkRouter({
       authenticator: deps.authenticator,
       snapshotReader: deps.snapshotReader ?? stubReader(),
-      flagBus:
-        deps.flagBus ??
-        createFlagBus({
-          interContainer: createInMemoryInterContainerBus(),
-          fanoutToRegions: () => {},
-        }),
     }),
   );
   return app;
@@ -140,11 +146,11 @@ describe('GET /api/sdk/flags: auth result mapping', () => {
 // ── /api/sdk/flags — successful response shape ────────────────────────────────
 
 describe('GET /api/sdk/flags: success', () => {
-  it('returns 200 with the body produced by snapshotReader.read', async () => {
+  it('returns 200 with the body produced by snapshotReader.serve', async () => {
     const app = makeApp({
       authenticator: stubAuthenticator(okAuth),
       snapshotReader: stubReader({
-        read: () =>
+        serve: () =>
           JSON.stringify({
             flags: [
               { key: 'feature-a', enabled: true },
@@ -190,12 +196,12 @@ describe('GET /api/sdk/flags: success', () => {
     expect(res.headers.get('cache-control')).toBe('s-maxage=300, stale-while-revalidate=60');
   });
 
-  it('forwards the CloudFront-Viewer-Country header to snapshotReader.read', async () => {
+  it('forwards the CloudFront-Viewer-Country header to snapshotReader.serve', async () => {
     let seenCountry: string | null | undefined;
     const app = makeApp({
       authenticator: stubAuthenticator(okAuth),
       snapshotReader: stubReader({
-        read: (countryCode) => {
+        serve: (countryCode) => {
           seenCountry = countryCode;
           return JSON.stringify({ flags: [] });
         },
@@ -217,7 +223,7 @@ describe('GET /api/sdk/flags: success', () => {
     const app = makeApp({
       authenticator: stubAuthenticator(okAuth),
       snapshotReader: stubReader({
-        read: (countryCode) => {
+        serve: (countryCode) => {
           seenCountry = countryCode;
           return JSON.stringify({ flags: [] });
         },
@@ -274,7 +280,7 @@ describe('GET /api/sdk/flags/stream', () => {
     const app = makeApp({
       authenticator: stubAuthenticator(okAuth),
       snapshotReader: stubReader({
-        read: () => JSON.stringify({ flags: [{ key: 'feat-a', enabled: true }] }),
+        serve: () => JSON.stringify({ flags: [{ key: 'feat-a', enabled: true }] }),
       }),
     });
     const res = await app.fetch(
@@ -297,24 +303,17 @@ describe('GET /api/sdk/flags/stream', () => {
     await reader.cancel();
   });
 
-  it('routes flagBus payloads through the connection-bound evaluator', async () => {
-    const flagBus = createFlagBus({
-      interContainer: createInMemoryInterContainerBus(),
-      fanoutToRegions: () => {},
-    });
-
-    const evaluatorCalls: Array<{ countryCode: string | null; override: string | undefined }> = [];
-    const evaluator: FlagEvaluator = (countryCode, override) => {
-      evaluatorCalls.push({ countryCode, override });
-      return override
-        ? JSON.stringify({ flags: [{ key: 'feat-a', enabled: true }] })
-        : JSON.stringify({ flags: [{ key: 'feat-a', enabled: false }] });
+  it('writes frames pushed by the openSession callback to the SSE stream', async () => {
+    const sessionHook: SessionHook = {
+      pushFrame: () => {},
+      closeCalls: 0,
     };
-
     const app = makeApp({
       authenticator: stubAuthenticator(okAuth),
-      snapshotReader: stubReader({ evaluator }),
-      flagBus,
+      snapshotReader: stubReader({
+        initialFrameFor: () => JSON.stringify({ flags: [{ key: 'feat-a', enabled: false }] }),
+        sessionHook,
+      }),
     });
 
     const res = await app.fetch(
@@ -331,9 +330,7 @@ describe('GET /api/sdk/flags/stream', () => {
       flags: [{ key: 'feat-a', enabled: false }],
     });
 
-    // Bus delivers a fresh raw payload — the route's listener should pass it
-    // to the evaluator as `override`, not call snapshotReader.read again.
-    await flagBus.publishLocal('env-1', JSON.stringify({ flags: ['ignored'] }));
+    sessionHook.pushFrame(JSON.stringify({ flags: [{ key: 'feat-a', enabled: true }] }));
 
     const { value: updVal } = await reader.read();
     const updText = new TextDecoder().decode(updVal);
@@ -341,12 +338,8 @@ describe('GET /api/sdk/flags/stream', () => {
       flags: [{ key: 'feat-a', enabled: true }],
     });
 
-    expect(evaluatorCalls.length).toBeGreaterThanOrEqual(2);
-    expect(evaluatorCalls[0]).toEqual({ countryCode: 'US', override: undefined });
-    expect(evaluatorCalls[1]?.override).toBe(JSON.stringify({ flags: ['ignored'] }));
-    expect(evaluatorCalls[1]?.countryCode).toBe('US');
-
     await reader.cancel();
+    expect(sessionHook.closeCalls).toBe(1);
   });
 });
 
@@ -376,10 +369,6 @@ function makeSecureApp() {
     createSdkRouter({
       authenticator: stubAuthenticator({ ok: false, status: 401, reason: 'missing_token' }),
       snapshotReader: stubReader(),
-      flagBus: createFlagBus({
-        interContainer: createInMemoryInterContainerBus(),
-        fanoutToRegions: () => {},
-      }),
     }),
   );
   return app;
@@ -421,10 +410,6 @@ function makeDocsApp() {
   const sdkRouter = createSdkRouter({
     authenticator: stubAuthenticator({ ok: false, status: 401, reason: 'missing_token' }),
     snapshotReader: stubReader(),
-    flagBus: createFlagBus({
-      interContainer: createInMemoryInterContainerBus(),
-      fanoutToRegions: () => {},
-    }),
   });
   const app = new Hono();
   app.route('/api/sdk', sdkRouter);
