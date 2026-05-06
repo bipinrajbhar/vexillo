@@ -36,7 +36,7 @@ import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
-export type NotifyFlagChange = (environmentId: string, payload: string) => void | Promise<void>;
+export type PublishLocal = (environmentId: string, payload: string) => Promise<void>;
 export type ClearAuthCache = (environmentId: string) => void;
 export type InvalidateMemberContext = (orgId: string, userId: string) => void;
 
@@ -122,12 +122,12 @@ export function createServiceEffects(
   db: DbClient,
   caches: ServiceCaches,
   opts: {
-    notifyFlagChange?: NotifyFlagChange;
+    publishLocal?: PublishLocal;
     clearAuthCache?: ClearAuthCache;
     invalidateMemberContext?: InvalidateMemberContext;
   } = {},
 ): ServiceEffects {
-  const { notifyFlagChange, clearAuthCache, invalidateMemberContext } = opts;
+  const { publishLocal, clearAuthCache, invalidateMemberContext } = opts;
   return {
     async audit(orgId, actorId, payload) {
       await insertAuditLog(db, { orgId, actorId, ...payload });
@@ -139,9 +139,9 @@ export function createServiceEffects(
       if (domains.includes('removedMembers')) caches.removedMembers.delete(orgId);
     },
     async publishFlagChange(orgId, environmentId) {
-      if (!notifyFlagChange) return;
+      if (!publishLocal) return;
       const flagStates = await queryEnvironmentFlagStates(db, orgId, environmentId);
-      await notifyFlagChange(environmentId, JSON.stringify({ flags: flagStates }));
+      await publishLocal(environmentId, JSON.stringify({ flags: flagStates }));
     },
     evictAuthCache(environmentId) {
       clearAuthCache?.(environmentId);

@@ -10,11 +10,13 @@ import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
 import { createDashboardService, createServiceEffects, createServiceCaches } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
-import { createStreamRegistry } from './lib/stream-registry';
 import { createAuthCache } from './lib/auth-cache';
-import { createSnapshotCache } from './lib/snapshot-cache';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
-import { createFlagChangeNotifier } from './lib/flag-change-notifier';
+import {
+  createFlagBus,
+  createInMemoryInterContainerBus,
+  createRedisInterContainerBus,
+} from './lib/flag-bus';
 import { createOrgContextResolver } from './lib/org-context-resolver';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -26,16 +28,11 @@ const db = createDbClient(DATABASE_URL, { max: 10 });
 const auth = createAuth(db);
 
 const authCache = createAuthCache();
-const snapshotCache = createSnapshotCache();
 
 // Optional Redis: enables cross-container SSE fan-out. Omit REDIS_URL to run
 // single-container (stream still works; toggles reach only local connections).
 const REDIS_URL = process.env.REDIS_URL;
 const redisClients = REDIS_URL ? createRedisClients(REDIS_URL) : undefined;
-
-// Always create the registry — it works in-memory without Redis. The Redis
-// subscriber is only needed for cross-container fan-out.
-const streamRegistry = createStreamRegistry(redisClients?.subscriber);
 
 // Cross-region fan-out: when SECONDARY_REGION_URLS is set, flag changes are
 // POSTed to each secondary region's /internal/flag-change endpoint. Fire-and-
@@ -43,27 +40,29 @@ const streamRegistry = createStreamRegistry(redisClients?.subscriber);
 // If INTERNAL_SECRET is not configured a random value is used at startup so the
 // endpoint is locked even without an explicit secret.
 const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? crypto.randomUUID();
-const regionFanout = createRegionFanout(
+const fanoutToRegions = createRegionFanout(
   parseSecondaryUrls(process.env.SECONDARY_REGION_URLS),
   INTERNAL_SECRET,
 );
 
-// With Redis: publish to the channel so all containers' subscribers pick it up.
-// Without Redis: broadcast directly into the local registry.
-// Either way, update the snapshot cache so the next SSE connect skips the DB,
-// and fan out to secondary regions.
-const notifyFlagChange = createFlagChangeNotifier({
-  snapshotCache,
-  regionFanout,
-  redisPublisher: redisClients?.publisher,
-  streamRegistry: redisClients ? undefined : streamRegistry,
+// FlagBus owns the snapshot cache, the SSE listener registry, the
+// inter-container fan-out (Redis when present, in-memory otherwise), and the
+// region fanout — every flag-change path inside the API funnels through it.
+const flagBus = createFlagBus({
+  interContainer: redisClients
+    ? createRedisInterContainerBus({
+        publisher: redisClients.publisher,
+        subscriber: redisClients.subscriber,
+      })
+    : createInMemoryInterContainerBus(),
+  fanoutToRegions,
 });
 
 const orgContextResolver = createOrgContextResolver({ db });
 
 const serviceCaches = createServiceCaches();
 const serviceEffects = createServiceEffects(db, serviceCaches, {
-  notifyFlagChange,
+  publishLocal: (envId, payload) => flagBus.publishLocal(envId, payload),
   clearAuthCache: (environmentId) => authCache.deleteByEnvironmentId(environmentId),
   invalidateMemberContext: (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
 });
@@ -108,7 +107,7 @@ app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // SDK routes — public, CORS *, CDN-cacheable
-const sdkRouter = createSdkRouter(db, streamRegistry, authCache, snapshotCache);
+const sdkRouter = createSdkRouter(db, flagBus, authCache);
 app.route('/api/sdk', sdkRouter);
 
 // OpenAPI spec + interactive docs (unauthenticated; internal use only)
@@ -133,7 +132,7 @@ app.route(
 
 // Internal cross-region propagation — not exposed via CloudFront; reachable
 // only via the ALB directly from the primary region's ECS tasks.
-app.route('/internal', createInternalRouter(snapshotCache, streamRegistry, redisClients?.publisher, INTERNAL_SECRET));
+app.route('/internal', createInternalRouter(flagBus, INTERNAL_SECRET));
 
 const port = Number(process.env.PORT ?? 3000);
 
