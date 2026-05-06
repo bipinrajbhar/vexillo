@@ -47,6 +47,20 @@ export interface TaskScheduler {
   run(task: () => Promise<void>): void;
 }
 
+/**
+ * Recurring-tick port for the SSE keepalive timer. Production wraps
+ * `setInterval`/`clearInterval`; tests use a manual ticker exposing `tick()`
+ * for synchronous keepalive assertions.
+ *
+ * Distinct from `Clock` (pull-comparison for SWR) and `TaskScheduler`
+ * (one-shot fire-and-forget for background refreshes) so each port's
+ * lifecycle semantics are encoded in its name: this one is recurring with
+ * cancellation.
+ */
+export interface IntervalScheduler {
+  every(ms: number, task: () => void): () => void;
+}
+
 // ── Public roles ──────────────────────────────────────────────────────────────
 
 export interface FlagSnapshotReader {
@@ -68,6 +82,22 @@ export interface FlagSnapshotReader {
     countryCode: string | null;
     onFrame: (evaluatedJson: string) => void;
   }): Promise<{ initialFrame: string; close: () => void }>;
+
+  /**
+   * Build a fully-formed SSE Response. Owns: TransformStream pull-wrapper,
+   * id sequencing (continued from `lastEventId`), `retry:` hint on the first
+   * frame, `: keepalive` comment frames, abort cleanup, listener teardown,
+   * SSE framing, and the standard SSE headers. The route layers CORS on top
+   * via `corsHeaders` — the only knob the route owns.
+   */
+  streamSse(args: {
+    orgId: string;
+    environmentId: string;
+    countryCode: string | null;
+    lastEventId: string | null;
+    abortSignal: AbortSignal;
+    corsHeaders: Record<string, string>;
+  }): Promise<Response>;
 }
 
 export interface FlagSnapshotWriter {
@@ -92,12 +122,20 @@ export interface FlagSnapshots {
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 const DEFAULT_TTL_MS = 30_000;
+const DEFAULT_KEEPALIVE_MS = 25_000;
 
 const defaultClock: Clock = { now: () => Date.now() };
 
 const defaultScheduler: TaskScheduler = {
   run(task) {
     void task().catch(() => {});
+  },
+};
+
+const defaultIntervalScheduler: IntervalScheduler = {
+  every(ms, task) {
+    const handle = setInterval(task, ms);
+    return () => clearInterval(handle);
   },
 };
 
@@ -131,12 +169,16 @@ export function createFlagSnapshots(deps: {
   scheduler?: TaskScheduler;
   store?: SnapshotStore;
   ttlMs?: number;
+  intervalScheduler?: IntervalScheduler;
+  keepaliveMs?: number;
 }): FlagSnapshots {
   const { loader, interContainer, fanoutToRegions } = deps;
   const clock = deps.clock ?? defaultClock;
   const scheduler = deps.scheduler ?? defaultScheduler;
   const store = deps.store ?? createLruSnapshotStore();
   const ttlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
+  const intervalScheduler = deps.intervalScheduler ?? defaultIntervalScheduler;
+  const keepaliveMs = deps.keepaliveMs ?? DEFAULT_KEEPALIVE_MS;
 
   // SSE listeners: envId → set of `onFrame` callbacks (already country-bound by openSession).
   const listeners = new Map<string, Set<(rawPayload: string) => void>>();
@@ -201,20 +243,112 @@ export function createFlagSnapshots(deps: {
     };
   }
 
+  async function openSessionImpl(args: {
+    orgId: string;
+    environmentId: string;
+    countryCode: string | null;
+    onFrame: (evaluatedJson: string) => void;
+  }): Promise<{ initialFrame: string; close: () => void }> {
+    const initialRaw = await loadRaw(args.orgId, args.environmentId);
+    const initialFrame = evaluate(initialRaw, args.countryCode);
+    const close = registerListener(args.environmentId, (rawPayload) => {
+      args.onFrame(evaluate(rawPayload, args.countryCode));
+    });
+    return { initialFrame, close };
+  }
+
+  async function streamSseImpl(args: {
+    orgId: string;
+    environmentId: string;
+    countryCode: string | null;
+    lastEventId: string | null;
+    abortSignal: AbortSignal;
+    corsHeaders: Record<string, string>;
+  }): Promise<Response> {
+    const encoder = new TextEncoder();
+
+    // Use TransformStream + pull-based ReadableStream wrapper — the same
+    // pattern Hono's streamSSE uses internally. A push-only ReadableStream
+    // (start() + no pull()) causes Bun to consider the response done after
+    // the first chunk is consumed, so subsequent enqueues (keepalive, Redis
+    // snapshots) would close the connection. The push-through regression
+    // test in flag-snapshots.test.ts pins this invariant.
+    const { readable, writable } = new TransformStream<Uint8Array>();
+    const writer = writable.getWriter();
+    const tsReader = readable.getReader();
+
+    let keepaliveCancel: (() => void) | undefined;
+    let closeSession: (() => void) | undefined;
+    let closed = false;
+    let eventId = 1;
+
+    if (args.lastEventId) {
+      const parsed = parseInt(args.lastEventId, 10);
+      if (!isNaN(parsed)) eventId = parsed + 1;
+    }
+
+    function buildEvent(data: string, retryMs?: number): Uint8Array {
+      let msg = retryMs !== undefined ? `retry: ${retryMs}\n` : '';
+      msg += `id: ${eventId++}\n`;
+      msg += `data: ${data}\n\n`;
+      return encoder.encode(msg);
+    }
+
+    function cleanup(): void {
+      if (closed) return;
+      closed = true;
+      keepaliveCancel?.();
+      closeSession?.();
+      writer.close().catch(() => {});
+    }
+
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await tsReader.read();
+        done ? controller.close() : controller.enqueue(value);
+      },
+      cancel: cleanup,
+    });
+
+    const session = await openSessionImpl({
+      orgId: args.orgId,
+      environmentId: args.environmentId,
+      countryCode: args.countryCode,
+      onFrame: (evaluatedJson) => {
+        writer.write(buildEvent(evaluatedJson)).catch(() => {});
+      },
+    });
+    closeSession = session.close;
+
+    // First frame carries the retry hint so reconnect cadence is set without
+    // the client having to fail once to discover it.
+    await writer.write(buildEvent(session.initialFrame, 1000));
+
+    keepaliveCancel = intervalScheduler.every(keepaliveMs, () => {
+      writer.write(encoder.encode(': keepalive\n\n')).catch(() => {});
+    });
+
+    args.abortSignal.addEventListener('abort', cleanup);
+
+    return new Response(body, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        ...args.corsHeaders,
+      },
+    });
+  }
+
   const reader: FlagSnapshotReader = {
     async serve({ orgId, environmentId, countryCode }) {
       const raw = await loadRaw(orgId, environmentId);
       return evaluate(raw, countryCode);
     },
 
-    async openSession({ orgId, environmentId, countryCode, onFrame }) {
-      const initialRaw = await loadRaw(orgId, environmentId);
-      const initialFrame = evaluate(initialRaw, countryCode);
-      const close = registerListener(environmentId, (rawPayload) => {
-        onFrame(evaluate(rawPayload, countryCode));
-      });
-      return { initialFrame, close };
-    },
+    openSession: openSessionImpl,
+
+    streamSse: streamSseImpl,
   };
 
   const writer: FlagSnapshotWriter = {

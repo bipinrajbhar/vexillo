@@ -1,5 +1,6 @@
 import type {
   Clock,
+  IntervalScheduler,
   RegionFanout,
   SnapshotLoader,
   SnapshotStore,
@@ -102,5 +103,35 @@ export function createInMemoryStore(): SnapshotStore {
     delete: (envId) => {
       store.delete(envId);
     },
+  };
+}
+
+/**
+ * Manual ticker for the SSE keepalive timer. `tick()` synchronously fires
+ * every active task once; `activeCount()` lets cleanup tests assert the
+ * timer was cancelled. Production wraps the real `setInterval`.
+ */
+export interface FakeIntervalScheduler extends IntervalScheduler {
+  tick(): void;
+  activeCount(): number;
+}
+
+export function createFakeIntervalScheduler(): FakeIntervalScheduler {
+  let nextId = 0;
+  const active = new Map<number, () => void>();
+  return {
+    every(_ms, task) {
+      const id = ++nextId;
+      active.set(id, task);
+      return () => {
+        active.delete(id);
+      };
+    },
+    tick() {
+      // Snapshot the values so a task that cancels itself mid-tick doesn't
+      // mutate the iteration target.
+      for (const task of [...active.values()]) task();
+    },
+    activeCount: () => active.size,
   };
 }
