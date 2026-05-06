@@ -4,7 +4,6 @@ import { Scalar } from '@scalar/hono-api-reference';
 import { createDbClient } from '@vexillo/db';
 import { createSdkRouter, SDK_OPENAPI_CONFIG } from './routes/sdk';
 import { createSdkAuthenticator } from './lib/sdk-authenticator';
-import { createFlagSnapshotReader } from './lib/flag-snapshot-reader';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
@@ -13,11 +12,12 @@ import { createAuth } from './lib/auth';
 import { createDashboardService, createServiceEffects } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
+import { createFlagSnapshots } from './lib/flag-snapshots';
 import {
-  createFlagBus,
   createInMemoryInterContainerBus,
+  createPostgresSnapshotLoader,
   createRedisInterContainerBus,
-} from './lib/flag-bus';
+} from './lib/flag-snapshots/adapters';
 import { createOrgContextResolver } from './lib/org-context-resolver';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -44,10 +44,14 @@ const fanoutToRegions = createRegionFanout(
   INTERNAL_SECRET,
 );
 
-// FlagBus owns the snapshot cache, the SSE listener registry, the
-// inter-container fan-out (Redis when present, in-memory otherwise), and the
-// region fanout — every flag-change path inside the API funnels through it.
-const flagBus = createFlagBus({
+// FlagSnapshots owns the snapshot cache, the SSE listener registry, the
+// inter-container fan-out (Redis when present, in-memory otherwise), the cold-
+// miss DB load + SWR refresh, country-rule evaluation, and the region fanout.
+// The reader/writer split structurally enforces the no-region-loop rule:
+// /internal/flag-change is handed only the writer, and writer.ingestRemote
+// never fans out to peer regions.
+const { reader: flagSnapshotReader, writer: flagSnapshotWriter } = createFlagSnapshots({
+  loader: createPostgresSnapshotLoader({ db }),
   interContainer: redisClients
     ? createRedisInterContainerBus({
         publisher: redisClients.publisher,
@@ -60,13 +64,12 @@ const flagBus = createFlagBus({
 const orgContextResolver = createOrgContextResolver({ db });
 
 // SDK request pipeline: SdkAuthenticator owns the auth+origin gate (3-table
-// join + LRU + SWR), FlagSnapshotReader owns the snapshot fetch+evaluate path.
-// The route composes them and never sees `allowedOrigins` or raw flag rows.
+// join + LRU + SWR), the FlagSnapshots reader owns the snapshot fetch+evaluate
+// path. The route composes them and never sees `allowedOrigins` or raw flag rows.
 const sdkAuthenticator = createSdkAuthenticator({ db });
-const flagSnapshotReader = createFlagSnapshotReader({ db, flagBus });
 
 const serviceEffects = createServiceEffects(db, {
-  publishLocal: (envId, payload) => flagBus.publishLocal(envId, payload),
+  publishLocal: (envId, payload) => flagSnapshotWriter.publishLocal(envId, payload),
   invalidateMemberContext: (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
 });
 const dashboardService = createDashboardService(
@@ -117,7 +120,6 @@ app.all('/api/auth/*', (c) => auth.handler(c.req.raw));
 const sdkRouter = createSdkRouter({
   authenticator: sdkAuthenticator,
   snapshotReader: flagSnapshotReader,
-  flagBus,
 });
 app.route('/api/sdk', sdkRouter);
 
@@ -143,7 +145,7 @@ app.route(
 
 // Internal cross-region propagation — not exposed via CloudFront; reachable
 // only via the ALB directly from the primary region's ECS tasks.
-app.route('/internal', createInternalRouter(flagBus, INTERNAL_SECRET));
+app.route('/internal', createInternalRouter(flagSnapshotWriter, INTERNAL_SECRET));
 
 const port = Number(process.env.PORT ?? 3000);
 

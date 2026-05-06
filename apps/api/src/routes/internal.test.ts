@@ -1,18 +1,21 @@
 import { describe, it, expect } from 'bun:test';
 import { Hono } from 'hono';
 import { createInternalRouter } from './internal';
-import { createFlagBus, createInMemoryInterContainerBus } from '../lib/flag-bus';
+import { createFlagSnapshots } from '../lib/flag-snapshots';
+import { createInMemoryInterContainerBus } from '../lib/flag-snapshots/adapters';
+import { createFakeLoader } from '../lib/flag-snapshots/test-adapters';
 
 const SECRET = 'test-internal-secret';
 
 function makeApp() {
-  const flagBus = createFlagBus({
+  const { reader, writer } = createFlagSnapshots({
+    loader: createFakeLoader({}).loader,
     interContainer: createInMemoryInterContainerBus(),
     fanoutToRegions: () => {},
   });
   const app = new Hono();
-  app.route('/internal', createInternalRouter(flagBus, SECRET));
-  return { app, flagBus };
+  app.route('/internal', createInternalRouter(writer, SECRET));
+  return { app, reader, writer };
 }
 
 async function post(app: Hono, body: unknown, secret?: string) {
@@ -64,12 +67,21 @@ describe('POST /internal/flag-change', () => {
     expect(res.status).toBe(400);
   });
 
-  it('forwards a successful body to flagBus.ingestRemote (snapshot becomes readable)', async () => {
-    const { app, flagBus } = makeApp();
-    const res = await post(app, { envId: 'env-1', payload: '{"flags":[]}' }, SECRET);
+  it('forwards a successful body to writer.ingestRemote (snapshot becomes readable)', async () => {
+    const { app, reader } = makeApp();
+    const payload = JSON.stringify({ flags: [{ key: 'remote', enabled: true }] });
 
+    const res = await post(app, { envId: 'env-1', payload }, SECRET);
     expect(res.status).toBe(200);
-    expect(flagBus.readSnapshot('env-1')).toBe('{"flags":[]}');
+
+    // Loader is empty; if ingestRemote populated the cache, serve() returns
+    // the ingested payload without calling the loader (which would throw).
+    const served = await reader.serve({
+      orgId: 'o',
+      environmentId: 'env-1',
+      countryCode: null,
+    });
+    expect(JSON.parse(served)).toEqual({ flags: [{ key: 'remote', enabled: true }] });
   });
 
   it('returns ok:true on success', async () => {
