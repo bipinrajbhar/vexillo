@@ -51,10 +51,10 @@ The API starts on `http://localhost:3000` with hot reload.
 | `/api/auth/org-oauth/*` | None | Per-org Okta PKCE OAuth flow (authorize + callback) |
 | `/api/auth/*` | None | BetterAuth — session management |
 | `GET /api/sdk/flags` | API key | Current flag snapshot for an environment (JSON, CDN-cacheable) |
-| `GET /api/sdk/flags/stream` | API key | SSE stream — delivers the full flag snapshot immediately, then pushes a new snapshot on every toggle. Keepalive comment every 25 s. Includes `id:` and `retry:` fields per the SSE spec. |
+| `GET /api/sdk/flags/stream` | API key | SSE stream — delivers the full flag snapshot immediately, then pushes a new snapshot on every toggle. Keepalive comment every 25 s. Includes `id:` and `retry:` fields per the SSE spec. Reconnects send `Last-Event-ID` so the server continues the id sequence. |
 | `/api/dashboard/*` | Session (org member) | Org dashboard — flags, environments, members, API keys |
 | `/api/superadmin/*` | Super-admin | Org CRUD, Okta config, status management |
-| `POST /internal/flag-change` | `X-Internal-Secret` header | Cross-region propagation — receives a flag snapshot from the primary region, writes it to the local snapshot cache, and broadcasts to locally connected SSE clients. Not exposed via CloudFront; only accessible via the ALB directly. |
+| `POST /internal/flag-change` | `X-Internal-Secret` header | Cross-region propagation — receives a flag snapshot from the primary region and hands it to `FlagSnapshotWriter.ingestRemote()` (writes local cache + broadcasts to locally connected SSE clients, but skips region fanout). Not exposed via CloudFront; only accessible via the ALB directly. |
 
 ### Dashboard access levels
 
@@ -64,16 +64,22 @@ Within `/api/dashboard/*`, most endpoints require an active org session. Role-sp
 - **Admins** — manage flags, environments, API keys, view suspended members, and change member roles (cannot change super-admin roles)
 - **Super-admins** — suspend/restore members, manage orgs; cannot delete an org they are an active member of (returns 403)
 
+## Architecture
+
+The hot paths are organised around two modules:
+
+- **`FlagSnapshots`** (`src/lib/flag-snapshots/`) — owns everything the SDK reads: the per-`environmentId` snapshot cache (LRU, 30 s TTL, SWR refresh), country-rule evaluation, the inter-container bus (Redis pub/sub or in-memory), the SSE listener registry, the SSE response shape (TransformStream, keepalive, id sequencing, `retry:` hint, abort cleanup), and cross-region fanout. The factory returns a `{ reader, writer }` split. The reader powers `GET /api/sdk/flags` and `/flags/stream`; the writer is handed only to mutation paths. `writer.publishLocal()` writes locally, broadcasts to the inter-container bus, and fans out to peer regions. `writer.ingestRemote()` does the first two but never fans out — the no-region-loop invariant is enforced structurally at the route boundary.
+- **`FlagOps`** (`src/services/flag-ops/`) — single mutation orchestrator for the dashboard write path. `DashboardService` writes to the DB; `flagOps.commit(event)` fans out the consequences. Each `DomainEvent` (e.g. `flag.toggled`, `env.key_rotated`, `member.removed`) maps to a fixed combination of: audit-log insert (atomic with the caller's tx when supplied), `FlagSnapshotWriter.publishLocal()` for state-changing flag/env events, eviction of the four orgId-keyed list caches FlagOps owns, `SdkAuthenticator.evictByEnvironment()` for env mutations, and `OrgContextResolver.invalidate()` for membership changes. Ordering is enforced inside `commit` and not visible to callers. List endpoints route through `flagOps.read.*` (read-through caches keyed by `orgId`); the cache layout is private.
+
+`SdkAuthenticator` (`src/lib/sdk-authenticator.ts`) owns the SDK auth+origin gate end-to-end: 3-table join (api key hash → environment → org) on cold miss, LRU slot cache (1000 entries, 30 s TTL), per-env generation counter for O(1) eviction on rotation, and dead-slot tracking so a failed background refresh forces the next request to re-validate synchronously.
+
 ## Caching
 
-**Dashboard service** caches flags, environments, and members in-process (LRU, 30 s TTL, keyed by `orgId`) with write-through invalidation on every mutation.
-
-**SDK routes** maintain two additional in-process caches to minimise DB round-trips on SSE connects:
-
-| Cache | Key | TTL | Description |
-|-------|-----|-----|-------------|
-| Auth cache | API key hash | 30 s | Resolved `environmentId`, `orgId`, `allowedOrigins`, and org status. Shared by `GET /flags` and `GET /flags/stream`. |
-| Snapshot cache | `environmentId` | 30 s | Full flag snapshot JSON. Kept warm by `notifyFlagChange` on every toggle — subsequent SSE connects skip the DB entirely. |
+| Cache | Owner | Key | TTL | Description |
+|-------|-------|-----|-----|-------------|
+| Snapshot cache | `FlagSnapshots` | `environmentId` | 30 s | Raw flag-snapshot JSON. Kept warm by `writer.publishLocal` on every toggle and by `writer.ingestRemote` on cross-region delivery — subsequent REST/SSE serves skip the DB entirely. SWR: a stale hit serves immediately and triggers a background refresh. |
+| Auth cache | `SdkAuthenticator` | API key hash | 30 s | Resolved `environmentId`, `orgId`, `allowedOrigins`, and org status. Shared by `GET /flags` and `GET /flags/stream`. Evicted by FlagOps on `env.key_rotated` / `env.origins_updated` / `env.deleted`. |
+| Dashboard list caches | `FlagOps` | `orgId` | 30 s | Four LRU caches behind `flagOps.read.*` — flags-with-states, environments, members, removed-members. Busted on every `commit(event)` for the matching org. |
 
 On a warm connection (same API key, at least one recent toggle) SSE stream connect time drops from ~150 ms to under 20 ms.
 
@@ -85,42 +91,26 @@ On a warm connection (same API key, at least one recent toggle) SSE stream conne
 | `GET /api/sdk/flags` | `s-maxage=300, stale-while-revalidate=60` | 5 min (300 s default) |
 | `GET /api/sdk/flags/stream` | `no-cache` | Not cached (TTL=0 stream policy) |
 
-> SDK clients using `connectStream()` fetch `GET /api/sdk/flags` first (CDN cache hit, typically < 50 ms) to populate flags immediately, then open the SSE connection for real-time updates. The SSE snapshot overwrites the cached REST response once the stream connects.
+> SDK clients in `mode: "stream"` race REST against SSE on cold start — `GET /api/sdk/flags` (CDN cache hit, typically < 50 ms) populates flags immediately while the SSE handshake completes, and the first SSE snapshot then overwrites the REST response.
 
-## Flag change notification
+## Testing FlagSnapshots and FlagOps
 
-Every flag toggle flows through a single `NotifyFlagChange` callable assembled by `createFlagChangeNotifier` in `src/lib/flag-change-notifier.ts`. It owns three responsibilities in order:
+`src/lib/flag-snapshots/test-adapters.ts` exposes the seams the module is built around. Use these instead of stubbing the public surface:
 
-1. Write the new snapshot to `snapshotCache` (so the next SSE connect skips the DB).
-2. Fire a fire-and-forget POST to secondary regions via `regionFanout`.
-3. Deliver the snapshot to connected clients — via Redis pub/sub when `REDIS_URL` is set, or directly via `streamRegistry.broadcast` in single-container mode.
+| Adapter | Purpose |
+|---------|---------|
+| `createFakeClock()` | Fixed-time clock with `advance(ms)` — turn SWR staleness into a deterministic synchronous assertion. |
+| `createImmediateScheduler()` | Runs background tasks synchronously up to the first `await`; call `flush()` in the test to drain the SWR refresh promise. |
+| `createFakeLoader(initial)` | Versioned in-memory snapshot loader; `setVersion(envId, v)` lets you assert which version a `serve()` returned. |
+| `createInMemoryStore()` | Map-backed `SnapshotStore` (no eviction). |
+| `createCapturingFanout()` | Records `[envId, payload]` for region-fanout assertions. |
+| `createFakeIntervalScheduler()` | Manual ticker for the SSE keepalive timer (`tick()`, `activeCount()`). |
 
-```ts
-const notifyFlagChange = createFlagChangeNotifier({
-  snapshotCache,
-  regionFanout,
-  redisPublisher: redisClients?.publisher,   // multi-container path
-  streamRegistry: redisClients ? undefined : streamRegistry,  // single-container path
-});
-```
-
-The factory throws at startup if neither `redisPublisher` nor `streamRegistry` is supplied.
-
-**Testing.** Use `createTestFlagChangeNotifier` from `src/lib/flag-change-notifier.test-adapter.ts` instead of a bare `vi.fn()` when writing service tests. It records every call with structured access:
-
-```ts
-const notifier = createTestFlagChangeNotifier();
-const service = createDashboardService(db, notifier.notify);
-await service.toggleFlag(orgId, userId, 'feat-a', envId);
-
-expect(notifier.calls).toHaveLength(1);
-expect(notifier.lastCall()!.environmentId).toBe(envId);
-expect(notifier.lastCall()!.parsedPayload).toMatchObject({ flags: expect.any(Array) });
-```
+For service-level tests of `DashboardService` you typically construct a real `FlagOps` with a fake `FlagSnapshotWriter` (`{ publishLocal: vi.fn() }`) and assert that the right `commit(event)` ran — the audit row, the publish call, and the cache busts are atomic by construction.
 
 ## Multi-region propagation
 
-When `SECONDARY_REGION_URLS` is set, every call to `notifyFlagChange` (triggered by a flag toggle or country rule update on the primary region) fires a **fire-and-forget** HTTP POST to each secondary region's `/internal/flag-change` endpoint:
+When `SECONDARY_REGION_URLS` is set, every call to `FlagSnapshotWriter.publishLocal()` (driven by `FlagOps.commit` on flag toggles or country-rule updates) fires a **fire-and-forget** HTTP POST to each secondary region's `/internal/flag-change` endpoint:
 
 ```
 POST https://<secondary-alb>/internal/flag-change
@@ -132,10 +122,9 @@ Content-Type: application/json
 
 The secondary:
 1. Validates `X-Internal-Secret` — returns 401 if missing or wrong.
-2. Writes `payload` to its local `snapshotCache`.
-3. Publishes to its local Redis pub/sub channel (or broadcasts directly if no Redis), pushing the snapshot to all SSE clients connected to that region.
+2. Hands the body to `FlagSnapshotWriter.ingestRemote()`, which writes the payload to its local snapshot cache and publishes onto its inter-container bus (Redis pub/sub when `REDIS_URL` is set, in-memory otherwise) — pushing the snapshot to all SSE clients connected to that region. `ingestRemote` deliberately does **not** call `regionFanout`, so a primary→secondary→primary loop is impossible.
 
-A failure (network error, non-2xx response) is logged but does not block the primary's response. The secondary falls back to serving stale snapshots until its 30 s cache TTL expires and it refetches from RDS.
+A failure (network error, non-2xx response) is logged but does not block the primary's response. The secondary falls back to serving stale snapshots until its 30 s cache TTL expires and it refetches from RDS via the SWR refresh path.
 
 **Setup** (operator steps after deploying a secondary region):
 1. Generate a shared secret: `openssl rand -hex 32`
