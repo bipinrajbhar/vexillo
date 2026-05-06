@@ -1,14 +1,8 @@
 import { Hono } from 'hono';
 import type { GetSession } from '../lib/session';
-import type {
-  DashboardService,
-  OrgRow,
-  NotFoundError,
-  ConflictError,
-  PreconditionError,
-  ForbiddenError,
-} from '../services/dashboard-service';
+import type { DashboardService, OrgRow } from '../services/dashboard-service';
 import type { OrgContextResolver } from '../lib/org-context-resolver';
+import { handleServiceError } from '../lib/domain-errors';
 
 export type { GetSession } from '../lib/session';
 export type { Session } from '../lib/session';
@@ -18,20 +12,6 @@ type Variables = {
   org: OrgRow;
   userRole: string;
 };
-
-function handleServiceError(
-  err: unknown,
-  c: { json: (body: unknown, status: number) => Response },
-): Response | null {
-  if (err instanceof Error) {
-    const code = (err as { code?: string }).code;
-    if (code === 'NOT_FOUND') return c.json({ error: err.message }, 404) as Response;
-    if (code === 'CONFLICT') return c.json({ error: err.message }, 409) as Response;
-    if (code === 'PRECONDITION') return c.json({ error: err.message }, 400) as Response;
-    if (code === 'FORBIDDEN') return c.json({ error: err.message }, 403) as Response;
-  }
-  return null;
-}
 
 export function createDashboardRouter(service: DashboardService, getSession: GetSession, resolver: OrgContextResolver) {
   const router = new Hono<{ Variables: Variables }>();

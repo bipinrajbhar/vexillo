@@ -11,6 +11,43 @@ export async function queryUserIsSuperAdmin(db: DbClient, userId: string): Promi
   return row?.isSuperAdmin ?? false;
 }
 
+export type SuperAdminUserRow = {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: Date;
+};
+
+export async function querySuperAdminUsers(db: DbClient): Promise<SuperAdminUserRow[]> {
+  return db
+    .select({
+      id: authUser.id,
+      name: authUser.name,
+      email: authUser.email,
+      createdAt: authUser.createdAt,
+    })
+    .from(authUser)
+    .where(eq(authUser.isSuperAdmin, true))
+    .orderBy(asc(authUser.email));
+}
+
+export async function setUserSuperAdmin(
+  db: DbClient,
+  userId: string,
+  isSuperAdmin: boolean,
+): Promise<{ id: string; email: string; isSuperAdmin: boolean } | null> {
+  const [row] = await db
+    .update(authUser)
+    .set({ isSuperAdmin })
+    .where(eq(authUser.id, userId))
+    .returning({
+      id: authUser.id,
+      email: authUser.email,
+      isSuperAdmin: authUser.isSuperAdmin,
+    });
+  return row ?? null;
+}
+
 export type MemberRow = {
   id: string;
   name: string;

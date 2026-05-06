@@ -10,6 +10,7 @@ import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
 import { createDashboardService, createServiceEffects } from './services/dashboard-service';
+import { createSuperAdminService } from './services/superadmin-service';
 import { createRedisClients } from './lib/redis';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
 import { createFlagSnapshots } from './lib/flag-snapshots';
@@ -138,9 +139,10 @@ app.route(
 );
 
 // Super-admin routes — isSuperAdmin required
+const superAdminService = createSuperAdminService(db);
 app.route(
   '/api/superadmin',
-  createSuperAdminRouter(db, (headers) => auth.api.getSession({ headers })),
+  createSuperAdminRouter(superAdminService, (headers) => auth.api.getSession({ headers })),
 );
 
 // Internal cross-region propagation — not exposed via CloudFront; reachable

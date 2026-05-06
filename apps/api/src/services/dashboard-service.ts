@@ -41,52 +41,19 @@ export type PublishLocal = (environmentId: string, payload: string) => Promise<v
 export type ClearAuthCache = (environmentId: string) => void;
 export type InvalidateMemberContext = (orgId: string, userId: string) => void;
 
-// ── Domain errors ──────────────────────────────────────────────────────────────
+// Domain errors and helpers live in shared modules so SuperAdminService and
+// DashboardService throw a single error identity. Re-exported here so existing
+// callers (e.g. routes/dashboard.ts) keep working without changing imports.
+import {
+  NotFoundError,
+  ConflictError,
+  PreconditionError,
+  ForbiddenError,
+  isUniqueError,
+} from '../lib/domain-errors';
+import { slugify } from '../lib/slugify';
 
-export class NotFoundError extends Error {
-  readonly code = 'NOT_FOUND' as const;
-  constructor(message: string) {
-    super(message);
-    this.name = 'NotFoundError';
-  }
-}
-
-export class ConflictError extends Error {
-  readonly code = 'CONFLICT' as const;
-  constructor(message: string) {
-    super(message);
-    this.name = 'ConflictError';
-  }
-}
-
-export class PreconditionError extends Error {
-  readonly code = 'PRECONDITION' as const;
-  constructor(message: string) {
-    super(message);
-    this.name = 'PreconditionError';
-  }
-}
-
-export class ForbiddenError extends Error {
-  readonly code = 'FORBIDDEN' as const;
-  constructor(message: string) {
-    super(message);
-    this.name = 'ForbiddenError';
-  }
-}
-
-function isUniqueError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : '';
-  return msg.includes('unique') || msg.includes('duplicate');
-}
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
+export { NotFoundError, ConflictError, PreconditionError, ForbiddenError };
 
 // ── ServiceEffects ─────────────────────────────────────────────────────────────
 
