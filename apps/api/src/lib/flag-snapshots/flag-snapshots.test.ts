@@ -4,9 +4,11 @@ import { createInMemoryInterContainerBus } from './adapters';
 import {
   createCapturingFanout,
   createFakeClock,
+  createFakeIntervalScheduler,
   createFakeLoader,
   createImmediateScheduler,
   createInMemoryStore,
+  type FakeIntervalScheduler,
 } from './test-adapters';
 
 // All wiring lines up here so each test only mentions what it varies. Defaults:
@@ -17,6 +19,8 @@ function setup(opts: {
   ttlMs?: number;
   interContainer?: InterContainerBus;
   loaderInstance?: ReturnType<typeof createFakeLoader>;
+  intervalScheduler?: FakeIntervalScheduler;
+  keepaliveMs?: number;
 } = {}) {
   const fakeClock = createFakeClock();
   const scheduler = createImmediateScheduler();
@@ -25,6 +29,7 @@ function setup(opts: {
     opts.loaderInstance ?? createFakeLoader(opts.initialVersions ?? { env1: 'v1' });
   const fanoutCapture = createCapturingFanout();
   const interContainer = opts.interContainer ?? createInMemoryInterContainerBus();
+  const intervalScheduler = opts.intervalScheduler ?? createFakeIntervalScheduler();
 
   const { reader, writer } = createFlagSnapshots({
     loader: fakeLoader.loader,
@@ -34,6 +39,8 @@ function setup(opts: {
     scheduler,
     store,
     ttlMs: opts.ttlMs ?? 30_000,
+    intervalScheduler,
+    keepaliveMs: opts.keepaliveMs,
   });
 
   return {
@@ -45,6 +52,7 @@ function setup(opts: {
     setVersion: fakeLoader.setVersion,
     fanoutCalls: fanoutCapture.calls,
     interContainer,
+    intervalScheduler,
   };
 }
 
@@ -389,5 +397,176 @@ describe('listener lifecycle (refcounted inter-container subscription)', () => {
     expect(interContainer.subscribeCalls()).toBe(2);
     a.close();
     b.close();
+  });
+});
+
+// ── streamSse: SSE transport boundary ────────────────────────────────────────
+
+describe('FlagSnapshotReader.streamSse', () => {
+  const STREAM_ARGS = {
+    orgId: 'o',
+    environmentId: 'env1',
+    countryCode: null,
+    lastEventId: null,
+    corsHeaders: {},
+  } as const;
+
+  // Read one chunk from the response body. The response is an SSE stream, so
+  // each "chunk" is one buffered write from the producer side.
+  async function readChunk(res: Response): Promise<string> {
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    reader.releaseLock();
+    return new TextDecoder().decode(value);
+  }
+
+  function findDataLine(text: string): string | undefined {
+    return text.split('\n').find((l) => l.startsWith('data: '));
+  }
+
+  function findIdLine(text: string): string | undefined {
+    return text.split('\n').find((l) => l.startsWith('id: '));
+  }
+
+  it('first frame carries `retry: 1000` and `id: 1`, plus the initial snapshot data', async () => {
+    const { reader } = setup();
+    const ac = new AbortController();
+    const res = await reader.streamSse({ ...STREAM_ARGS, abortSignal: ac.signal });
+    const text = await readChunk(res);
+
+    expect(text).toContain('retry: 1000');
+    expect(text).toContain('id: 1');
+    expect(findDataLine(text)).toBeDefined();
+    ac.abort();
+  });
+
+  it('continues the id sequence after Last-Event-Id when a listener frame is pushed', async () => {
+    const { reader, writer } = setup();
+    const ac = new AbortController();
+    const res = await reader.streamSse({
+      ...STREAM_ARGS,
+      lastEventId: '42',
+      abortSignal: ac.signal,
+    });
+    const initial = await readChunk(res);
+    expect(initial).toContain('id: 43');
+
+    // Pushed listener frame should be id: 44.
+    await writer.publishLocal('env1', JSON.stringify({ flags: [{ key: 'pushed', enabled: true }] }));
+    const next = await readChunk(res);
+    expect(next).toContain('id: 44');
+    expect(findDataLine(next)).toContain('"pushed"');
+    ac.abort();
+  });
+
+  it('emits `: keepalive` frames when the IntervalScheduler ticks', async () => {
+    const intervalScheduler = createFakeIntervalScheduler();
+    const { reader } = setup({ intervalScheduler });
+    const ac = new AbortController();
+    const res = await reader.streamSse({ ...STREAM_ARGS, abortSignal: ac.signal });
+
+    // Drain the initial frame first so the next read sees the keepalive.
+    await readChunk(res);
+    expect(intervalScheduler.activeCount()).toBe(1);
+    intervalScheduler.tick();
+    const tick = await readChunk(res);
+    expect(tick).toBe(': keepalive\n\n');
+    ac.abort();
+  });
+
+  it('cancels the keepalive interval and closes the session on abort', async () => {
+    const intervalScheduler = createFakeIntervalScheduler();
+    const interContainer = (() => {
+      const inner = createInMemoryInterContainerBus();
+      return {
+        publish: (envId: string, payload: string) => inner.publish(envId, payload),
+        subscribe: (envId: string, onMessage: (payload: string) => void) =>
+          inner.subscribe(envId, onMessage),
+      };
+    })();
+    const { reader } = setup({ intervalScheduler, interContainer });
+    const ac = new AbortController();
+    const res = await reader.streamSse({ ...STREAM_ARGS, abortSignal: ac.signal });
+    await readChunk(res);
+    expect(intervalScheduler.activeCount()).toBe(1);
+
+    ac.abort();
+    expect(intervalScheduler.activeCount()).toBe(0);
+
+    // After abort, the body reader sees done.
+    const bodyReader = res.body!.getReader();
+    const { done } = await bodyReader.read();
+    expect(done).toBe(true);
+    bodyReader.releaseLock();
+  });
+
+  it('weaves CORS headers into the response alongside the SSE transport headers', async () => {
+    const { reader } = setup();
+    const ac = new AbortController();
+    const res = await reader.streamSse({
+      ...STREAM_ARGS,
+      corsHeaders: {
+        'Access-Control-Allow-Origin': 'https://app.example',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      },
+      abortSignal: ac.signal,
+    });
+
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+    expect(res.headers.get('connection')).toBe('keep-alive');
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example');
+    expect(res.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
+    ac.abort();
+  });
+
+  it('delivers multiple back-to-back listener frames without dropping any (Bun TransformStream pull-wrapper regression)', async () => {
+    // Pin the invariant that a push-only ReadableStream would break: Bun
+    // considers the response done after the first chunk is consumed, so
+    // subsequent enqueues would close the connection. The pull-based wrapper
+    // in streamSse keeps the pump alive across multiple writes.
+    const { reader, writer } = setup();
+    const ac = new AbortController();
+    const res = await reader.streamSse({ ...STREAM_ARGS, abortSignal: ac.signal });
+    await readChunk(res); // drain initial
+
+    // Push three frames synchronously.
+    await writer.publishLocal('env1', JSON.stringify({ flags: [{ key: 'a', enabled: true }] }));
+    await writer.publishLocal('env1', JSON.stringify({ flags: [{ key: 'b', enabled: true }] }));
+    await writer.publishLocal('env1', JSON.stringify({ flags: [{ key: 'c', enabled: true }] }));
+
+    const c1 = await readChunk(res);
+    const c2 = await readChunk(res);
+    const c3 = await readChunk(res);
+
+    expect(findDataLine(c1)).toContain('"a"');
+    expect(findDataLine(c2)).toContain('"b"');
+    expect(findDataLine(c3)).toContain('"c"');
+    expect(findIdLine(c1)).toBe('id: 2');
+    expect(findIdLine(c2)).toBe('id: 3');
+    expect(findIdLine(c3)).toBe('id: 4');
+    ac.abort();
+  });
+
+  it('evaluates the initial frame against the connection-bound country code', async () => {
+    const loaderInstance = createFakeLoader({ env1: 'unused' });
+    const { reader, writer } = setup({ loaderInstance });
+    await writer.publishLocal(
+      'env1',
+      JSON.stringify({
+        flags: [{ key: 'geo', enabled: true, allowedCountries: ['US'] }],
+      }),
+    );
+
+    const ac = new AbortController();
+    const res = await reader.streamSse({
+      ...STREAM_ARGS,
+      countryCode: 'GB',
+      abortSignal: ac.signal,
+    });
+    const text = await readChunk(res);
+    const data = findDataLine(text)!.slice('data: '.length);
+    expect(JSON.parse(data)).toEqual({ flags: [{ key: 'geo', enabled: false }] });
+    ac.abort();
   });
 });

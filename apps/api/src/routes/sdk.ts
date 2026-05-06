@@ -88,9 +88,9 @@ const getFlagsRoute = createRoute({
 
 export function createSdkRouter(deps: {
   authenticator: SdkAuthenticator;
-  // The route owns the SSE transport (TransformStream, keepalive, abort) and
-  // delegates everything flag-shaped — cold-miss DB load, cache, country
-  // evaluation, listener registration — to the reader's openSession().
+  // The route is purely the HTTP edge: auth + delegation. The SSE transport
+  // (TransformStream, keepalive, id sequencing, abort cleanup, headers)
+  // lives inside the reader's streamSse().
   snapshotReader: FlagSnapshotReader;
 }) {
   const { authenticator, snapshotReader } = deps;
@@ -173,79 +173,13 @@ export function createSdkRouter(deps: {
       return c.json(errorBodyFor(auth.reason), auth.status, SDK_ERROR_CORS_HEADERS);
     }
 
-    // Capture viewer country at connection time for per-connection geo evaluation.
-    const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
-
-    const encoder = new TextEncoder();
-
-    // Use TransformStream + pull-based wrapper — the same pattern Hono's
-    // streamSSE uses internally. A push-only ReadableStream (start() + no pull())
-    // causes Bun to consider the response done after the first chunk is consumed,
-    // so subsequent enqueues (keepalive, Redis snapshots) close the connection.
-    const { readable, writable } = new TransformStream<Uint8Array>();
-    const writer = writable.getWriter();
-    const tsReader = readable.getReader();
-
-    let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
-    let closeSession: (() => void) | undefined;
-    let closed = false;
-    let eventId = 1;
-
-    // Continue the ID sequence if the client is reconnecting.
-    const lastEventIdHeader = c.req.header('last-event-id');
-    if (lastEventIdHeader) {
-      const parsed = parseInt(lastEventIdHeader, 10);
-      if (!isNaN(parsed)) eventId = parsed + 1;
-    }
-
-    function buildEvent(data: string, retryMs?: number): Uint8Array {
-      let msg = retryMs !== undefined ? `retry: ${retryMs}\n` : '';
-      msg += `id: ${eventId++}\n`;
-      msg += `data: ${data}\n\n`;
-      return encoder.encode(msg);
-    }
-
-    function cleanup() {
-      if (closed) return;
-      closed = true;
-      clearInterval(keepaliveInterval);
-      closeSession?.();
-      writer.close().catch(() => {});
-    }
-
-    const body = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const { done, value } = await tsReader.read();
-        done ? controller.close() : controller.enqueue(value);
-      },
-      cancel: cleanup,
-    });
-
-    const session = await snapshotReader.openSession({
+    return snapshotReader.streamSse({
       orgId: auth.orgId,
       environmentId: auth.environmentId,
-      countryCode,
-      onFrame: (evaluatedJson) => {
-        writer.write(buildEvent(evaluatedJson)).catch(() => {});
-      },
-    });
-    closeSession = session.close;
-
-    // Send initial snapshot with retry hint so clients know the preferred
-    // reconnect delay without waiting for a failed attempt.
-    await writer.write(buildEvent(session.initialFrame, 1000));
-
-    keepaliveInterval = setInterval(() => {
-      writer.write(encoder.encode(': keepalive\n\n')).catch(() => {});
-    }, 25_000);
-
-    c.req.raw.signal.addEventListener('abort', cleanup);
-
-    return new Response(body, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+      countryCode: c.req.header('cloudfront-viewer-country') ?? null,
+      lastEventId: c.req.header('last-event-id') ?? null,
+      abortSignal: c.req.raw.signal,
+      corsHeaders: {
         'Access-Control-Allow-Origin': auth.allowedOriginHeader,
         'Access-Control-Allow-Methods': 'GET, OPTIONS',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',

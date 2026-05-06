@@ -22,30 +22,28 @@ function stubAuthenticator(result: AuthResult): SdkAuthenticator {
   };
 }
 
-type SessionHook = {
-  pushFrame: (json: string) => void;
-  closeCalls: number;
+type StreamHook = {
+  args: Parameters<FlagSnapshotReader['streamSse']>[0] | undefined;
 };
 
 function stubReader(opts: {
   serve?: (countryCode: string | null) => string;
-  initialFrameFor?: (countryCode: string | null) => string;
-  sessionHook?: SessionHook;
+  streamHook?: StreamHook;
 } = {}): FlagSnapshotReader {
   const serve = opts.serve ?? (() => JSON.stringify({ flags: [] }));
-  const initialFrameFor = opts.initialFrameFor ?? serve;
   return {
     serve: async (args) => serve(args.countryCode),
-    openSession: async ({ countryCode, onFrame }) => {
-      if (opts.sessionHook) {
-        opts.sessionHook.pushFrame = onFrame;
-      }
-      return {
-        initialFrame: initialFrameFor(countryCode),
-        close: () => {
-          if (opts.sessionHook) opts.sessionHook.closeCalls++;
+    openSession: async () => ({ initialFrame: '{"flags":[]}', close: () => {} }),
+    streamSse: async (args) => {
+      if (opts.streamHook) opts.streamHook.args = args;
+      return new Response('stub-stream-body', {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          ...args.corsHeaders,
         },
-      };
+      });
     },
   };
 }
@@ -277,70 +275,70 @@ describe('GET /api/sdk/flags/stream', () => {
     expect(res.status).toBe(403);
   });
 
-  it('emits the SSE response with the initial frame from the snapshot reader', async () => {
+  it('returns the response built by snapshotReader.streamSse', async () => {
+    const streamHook: StreamHook = { args: undefined };
     const app = makeApp({
       authenticator: stubAuthenticator(okAuth),
-      snapshotReader: stubReader({
-        serve: () => JSON.stringify({ flags: [{ key: 'feat-a', enabled: true }] }),
-      }),
+      snapshotReader: stubReader({ streamHook }),
     });
+
     const res = await app.fetch(
       new Request('http://localhost/api/sdk/flags/stream', {
         headers: { Authorization: 'Bearer sdk-validkey' },
       }),
     );
+
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
-    expect(res.headers.get('cache-control')).toBe('no-cache');
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
-
-    const reader = res.body!.getReader();
-    const { value } = await reader.read();
-    const text = new TextDecoder().decode(value);
-    const dataLine = text.split('\n').find((l) => l.startsWith('data: '))!;
-    expect(JSON.parse(dataLine.slice(6))).toEqual({
-      flags: [{ key: 'feat-a', enabled: true }],
-    });
-    await reader.cancel();
+    expect(await res.text()).toBe('stub-stream-body');
   });
 
-  it('writes frames pushed by the openSession callback to the SSE stream', async () => {
-    const sessionHook: SessionHook = {
-      pushFrame: () => {},
-      closeCalls: 0,
-    };
+  it('forwards the auth result, country header, last-event-id, and CORS headers to streamSse', async () => {
+    const streamHook: StreamHook = { args: undefined };
     const app = makeApp({
-      authenticator: stubAuthenticator(okAuth),
-      snapshotReader: stubReader({
-        initialFrameFor: () => JSON.stringify({ flags: [{ key: 'feat-a', enabled: false }] }),
-        sessionHook,
+      authenticator: stubAuthenticator({
+        ...okAuth,
+        allowedOriginHeader: 'https://app.example',
       }),
+      snapshotReader: stubReader({ streamHook }),
     });
 
-    const res = await app.fetch(
+    await app.fetch(
       new Request('http://localhost/api/sdk/flags/stream', {
-        headers: { Authorization: 'Bearer sdk-validkey', 'CloudFront-Viewer-Country': 'US' },
+        headers: {
+          Authorization: 'Bearer sdk-validkey',
+          'CloudFront-Viewer-Country': 'US',
+          'Last-Event-Id': '42',
+        },
       }),
     );
-    expect(res.status).toBe(200);
 
-    const reader = res.body!.getReader();
-    const { value: initVal } = await reader.read();
-    const initText = new TextDecoder().decode(initVal);
-    expect(JSON.parse(initText.split('\n').find((l) => l.startsWith('data: '))!.slice(6))).toEqual({
-      flags: [{ key: 'feat-a', enabled: false }],
+    expect(streamHook.args).toBeDefined();
+    expect(streamHook.args!.orgId).toBe('org-1');
+    expect(streamHook.args!.environmentId).toBe('env-1');
+    expect(streamHook.args!.countryCode).toBe('US');
+    expect(streamHook.args!.lastEventId).toBe('42');
+    expect(streamHook.args!.corsHeaders['Access-Control-Allow-Origin']).toBe(
+      'https://app.example',
+    );
+    expect(streamHook.args!.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('passes null country code and null last-event-id when those headers are absent', async () => {
+    const streamHook: StreamHook = { args: undefined };
+    const app = makeApp({
+      authenticator: stubAuthenticator(okAuth),
+      snapshotReader: stubReader({ streamHook }),
     });
 
-    sessionHook.pushFrame(JSON.stringify({ flags: [{ key: 'feat-a', enabled: true }] }));
+    await app.fetch(
+      new Request('http://localhost/api/sdk/flags/stream', {
+        headers: { Authorization: 'Bearer sdk-validkey' },
+      }),
+    );
 
-    const { value: updVal } = await reader.read();
-    const updText = new TextDecoder().decode(updVal);
-    expect(JSON.parse(updText.split('\n').find((l) => l.startsWith('data: '))!.slice(6))).toEqual({
-      flags: [{ key: 'feat-a', enabled: true }],
-    });
-
-    await reader.cancel();
-    expect(sessionHook.closeCalls).toBe(1);
+    expect(streamHook.args!.countryCode).toBeNull();
+    expect(streamHook.args!.lastEventId).toBeNull();
   });
 });
 
