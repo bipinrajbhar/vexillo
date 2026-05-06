@@ -66,7 +66,7 @@ export interface FlagOpsDeps {
   // at the route boundary (a region-receiving route can't accidentally publish
   // through this module).
   flagSnapshots: { writer: Pick<FlagSnapshotWriter, 'publishLocal'> };
-  sdkAuth: Pick<SdkAuthenticator, 'evictByEnvironment'>;
+  sdkAuth: Pick<SdkAuthenticator, 'evictByEnvironment' | 'forgetEnvironment'>;
   orgContext: Pick<OrgContextResolver, 'invalidate'>;
   ttlMs?: number;
   max?: number;
@@ -217,10 +217,12 @@ export function createFlagOps(deps: FlagOpsDeps): FlagOps {
           },
           tx,
         );
-        // Required, not optional: a deleted environment must drop any cached
-        // SDK auth entry — otherwise its API key keeps authenticating until
-        // the auth cache TTL expires.
-        sdkAuth.evictByEnvironment(event.environmentId);
+        // `forgetEnvironment` is the cleanup variant — drops cached slots,
+        // bumps the generation, and reclaims the per-env entry in the
+        // authenticator's generations table. A plain `evictByEnvironment`
+        // would leave the entry behind, accumulating one per deleted env
+        // for the lifetime of the process.
+        sdkAuth.forgetEnvironment(event.environmentId);
         envsCache.delete(event.orgId);
         flagsCache.delete(event.orgId);
         return;
