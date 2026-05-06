@@ -63,6 +63,12 @@ export interface OrgOAuthService {
   beginAuthorize(req: AuthorizeRequest): Promise<AuthorizeResult>;
   completeCallback(req: CallbackRequest): Promise<CallbackResult>;
   getOrgMeta(orgSlug: string): Promise<MetaResult>;
+  /**
+   * Drop the cached OIDC discovery document for this issuer. Call after a
+   * SuperAdmin updates an org's `oktaIssuer` (and conservatively on any
+   * Okta-config change) so the next sign-in re-fetches discovery.
+   */
+  invalidateIssuer(issuer: string): void;
 }
 
 export const STATE_COOKIE = 'org_oauth_state';

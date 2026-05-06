@@ -1,6 +1,7 @@
 import {
   queryAllOrgs,
   insertOrg,
+  queryOrgBySlug,
   queryOrgWithMemberCount,
   updateOrgFields,
   setOrgStatus,
@@ -22,6 +23,7 @@ import {
 } from '../lib/domain-errors';
 import { slugify } from '../lib/slugify';
 import { encryptSecret, decryptSecret } from '../lib/okta-crypto';
+import type { OrgOAuthService } from '../lib/org-oauth';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -72,7 +74,17 @@ export interface SuperAdminService {
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
-export function createSuperAdminService(db: DbClient): SuperAdminService {
+/**
+ * Optional dependency surface for invalidating the OIDC discovery cache when
+ * an org's Okta config changes. Narrowed so SuperAdminService doesn't pull in
+ * the full OrgOAuthService surface.
+ */
+export type SuperAdminOAuthInvalidator = Pick<OrgOAuthService, 'invalidateIssuer'>;
+
+export function createSuperAdminService(
+  db: DbClient,
+  orgOAuth?: SuperAdminOAuthInvalidator,
+): SuperAdminService {
   async function decryptOrgSecret(org: OrgRow): Promise<OrgWithSecret> {
     return { ...org, oktaClientSecret: await decryptSecret(org.oktaClientSecret) };
   }
@@ -136,9 +148,22 @@ export function createSuperAdminService(db: DbClient): SuperAdminService {
         throw new PreconditionError('No fields to update');
       }
 
+      // Snapshot the *old* issuer before the update so we can evict the
+      // discovery cache for that URL. Only paid for when the patch touches
+      // Okta config — name-only updates skip the extra read.
+      const oktaConfigChanging =
+        orgOAuth !== undefined &&
+        (fields.oktaIssuer !== undefined ||
+          fields.oktaClientId !== undefined ||
+          fields.oktaClientSecret !== undefined);
+      const oldIssuer = oktaConfigChanging
+        ? (await queryOrgBySlug(db, slug))?.oktaIssuer
+        : undefined;
+
       try {
         const updated = await updateOrgFields(db, slug, fields);
         if (!updated) throw new NotFoundError('Organization not found');
+        if (orgOAuth && oldIssuer) orgOAuth.invalidateIssuer(oldIssuer);
         return decryptOrgSecret(updated);
       } catch (err) {
         if (isUniqueError(err)) throw new ConflictError('Slug already exists');
