@@ -65,6 +65,29 @@ describe('createCacheInvalidator — onEnvironmentOriginsUpdate', () => {
   });
 });
 
+describe('createCacheInvalidator — onEnvironmentKeyRotation', () => {
+  it('clears envs cache and calls clearAuthCache with environmentId — NOT flags cache', () => {
+    const deps = makeDeps();
+    const cache = createCacheInvalidator(deps);
+    cache.onEnvironmentKeyRotation('org-1', 'env-99');
+
+    expect(deps.envsCache.delete).toHaveBeenCalledTimes(1);
+    expect(deps.envsCache.delete.mock.calls[0]).toEqual(['org-1']);
+    expect(deps.clearAuthCache).toHaveBeenCalledTimes(1);
+    expect(deps.clearAuthCache.mock.calls[0]).toEqual(['env-99']);
+    expect(deps.flagsCache.delete).not.toHaveBeenCalled();
+    expect(deps.membersCache.delete).not.toHaveBeenCalled();
+    expect(deps.removedMembersCache.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when clearAuthCache is not provided', () => {
+    const { clearAuthCache: _, ...depsWithoutAuth } = makeDeps();
+    const cache = createCacheInvalidator(depsWithoutAuth);
+    expect(() => cache.onEnvironmentKeyRotation('org-1', 'env-99')).not.toThrow();
+    expect(depsWithoutAuth.envsCache.delete).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('createCacheInvalidator — onMemberMutation', () => {
   it('clears both members and removedMembers caches', () => {
     const deps = makeDeps();

@@ -10,7 +10,7 @@ import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
-import { createDashboardService, createServiceEffects, createServiceCaches } from './services/dashboard-service';
+import { createDashboardService, createServiceEffects } from './services/dashboard-service';
 import { createRedisClients } from './lib/redis';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
 import {
@@ -65,13 +65,15 @@ const orgContextResolver = createOrgContextResolver({ db });
 const sdkAuthenticator = createSdkAuthenticator({ db });
 const flagSnapshotReader = createFlagSnapshotReader({ db, flagBus });
 
-const serviceCaches = createServiceCaches();
-const serviceEffects = createServiceEffects(db, serviceCaches, {
+const serviceEffects = createServiceEffects(db, {
   publishLocal: (envId, payload) => flagBus.publishLocal(envId, payload),
-  clearAuthCache: (environmentId) => sdkAuthenticator.evictByEnvironment(environmentId),
   invalidateMemberContext: (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
 });
-const dashboardService = createDashboardService(db, serviceEffects, serviceCaches);
+const dashboardService = createDashboardService(
+  db,
+  serviceEffects,
+  (environmentId) => sdkAuthenticator.evictByEnvironment(environmentId),
+);
 
 const app = new Hono();
 

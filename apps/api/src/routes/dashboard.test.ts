@@ -106,9 +106,7 @@ function makeApp(service: DashboardService, getSession: GetSession, resolver: Or
 function makeNullEffects(): ServiceEffects {
   return {
     audit: mock(async () => {}),
-    invalidate: mock(() => {}),
     publishFlagChange: mock(async () => {}),
-    evictAuthCache: mock(() => {}),
     evictMemberContext: mock(() => {}),
   };
 }
@@ -901,7 +899,6 @@ describe('createDashboardService — toggleFlag effects', () => {
     expect((effects.audit as ReturnType<typeof mock>).mock.calls[0]).toMatchObject([
       'org-1', 'actor-1', expect.objectContaining({ action: 'flag.toggle' }),
     ]);
-    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['flags']);
   });
 
   it('throws NotFoundError and calls no effects when flag is missing', async () => {
@@ -936,7 +933,6 @@ describe('createDashboardService — updateCountryRules effects', () => {
     expect((effects.audit as ReturnType<typeof mock>).mock.calls[0]).toMatchObject([
       'org-1', 'actor-1', expect.objectContaining({ action: 'flag.country-rules.update' }),
     ]);
-    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['flags']);
   });
 
   it('clears rules when countries is empty', async () => {
@@ -977,7 +973,6 @@ describe('createDashboardService — createFlag transaction boundary', () => {
     expect((effects.audit as ReturnType<typeof mock>).mock.calls[0]).toMatchObject([
       'org-1', 'u1', expect.objectContaining({ action: 'flag.create' }),
     ]);
-    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['flags']);
   });
 
   it('propagates error when backfill throws inside the transaction', async () => {
@@ -1016,20 +1011,19 @@ describe('createDashboardService — createFlag transaction boundary', () => {
 });
 
 describe('createDashboardService — updateEnvironmentOrigins effects', () => {
-  it('calls evictAuthCache with the environment id, not a full flush', async () => {
+  it('clears the auth cache for the environment id, not a full flush', async () => {
     const db = makeServiceDb([
       [{ id: 'env-1', orgId: 'org-1', allowedOrigins: ['https://example.com'] }], // updateEnvironmentOrigins (thenable)
     ]);
 
     const effects = makeNullEffects();
-    const service = createDashboardService(db, effects);
+    const clearAuthCache = mock((_envId: string) => {});
+    const service = createDashboardService(db, effects, clearAuthCache);
     await service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-1', ['https://example.com']);
 
-    expect(effects.evictAuthCache).toHaveBeenCalledTimes(1);
-    const [envId] = (effects.evictAuthCache as ReturnType<typeof mock>).mock.calls[0] as unknown as [string];
-    expect(envId).toBe('env-1');
+    expect(clearAuthCache).toHaveBeenCalledTimes(1);
+    expect(clearAuthCache.mock.calls[0]).toEqual(['env-1']);
     expect(effects.audit).toHaveBeenCalledTimes(1);
-    expect(effects.invalidate).toHaveBeenCalledWith('org-1', ['envs']);
   });
 
   it('throws NotFoundError and calls no effects when environment is not found', async () => {
@@ -1038,11 +1032,12 @@ describe('createDashboardService — updateEnvironmentOrigins effects', () => {
     ]);
 
     const effects = makeNullEffects();
-    const service = createDashboardService(db, effects);
+    const clearAuthCache = mock((_envId: string) => {});
+    const service = createDashboardService(db, effects, clearAuthCache);
     await expect(
       service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-missing', ['https://example.com']),
     ).rejects.toThrow('Environment not found');
-    expect(effects.evictAuthCache).not.toHaveBeenCalled();
+    expect(clearAuthCache).not.toHaveBeenCalled();
     expect(effects.audit).not.toHaveBeenCalled();
   });
 });

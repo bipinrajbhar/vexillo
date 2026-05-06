@@ -10,6 +10,7 @@ export interface DashboardCacheInvalidator {
   onFlagMutation(orgId: string): void;
   onEnvironmentStructuralChange(orgId: string): void;
   onEnvironmentOriginsUpdate(orgId: string, environmentId: string): void;
+  onEnvironmentKeyRotation(orgId: string, environmentId: string): void;
   onMemberMutation(orgId: string): void;
 }
 
@@ -23,6 +24,10 @@ export function createCacheInvalidator(deps: CacheInvalidatorDeps): DashboardCac
       deps.flagsCache.delete(orgId);
     },
     onEnvironmentOriginsUpdate(orgId, environmentId) {
+      deps.envsCache.delete(orgId);
+      deps.clearAuthCache?.(environmentId);
+    },
+    onEnvironmentKeyRotation(orgId, environmentId) {
       deps.envsCache.delete(orgId);
       deps.clearAuthCache?.(environmentId);
     },
