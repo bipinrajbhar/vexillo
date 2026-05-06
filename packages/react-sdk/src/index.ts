@@ -4,7 +4,7 @@ export { createVexilloClient } from "./client";
 export type {
   VexilloClient,
   VexilloClientConfig,
-  ConnectionStatus,
+  ClientStatus,
 } from "./client";
 
 export { VexilloClientProvider } from "./provider";

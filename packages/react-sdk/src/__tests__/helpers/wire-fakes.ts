@@ -130,3 +130,33 @@ export function snapshotMessage(
 export async function flush(times = 6): Promise<void> {
   for (let i = 0; i < times; i++) await Promise.resolve();
 }
+
+// ---------------------------------------------------------------------------
+// Focus signal fake: a manually-fired focus channel for autoRefresh tests.
+// ---------------------------------------------------------------------------
+
+export interface FakeFocusSignal {
+  signal: (cb: () => void) => () => void;
+  /** Number of currently-subscribed callbacks. */
+  readonly listenerCount: number;
+  /** Synchronously fires every subscribed callback. */
+  fire(): void;
+}
+
+export function makeFakeFocusSignal(): FakeFocusSignal {
+  const listeners = new Set<() => void>();
+  return {
+    signal: (cb) => {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+    get listenerCount() {
+      return listeners.size;
+    },
+    fire() {
+      for (const cb of listeners) cb();
+    },
+  };
+}

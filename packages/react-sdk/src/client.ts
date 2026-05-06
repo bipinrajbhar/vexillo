@@ -6,67 +6,80 @@ import {
 import { flagsArrayToRecord } from "./fetch-flags";
 
 /**
- * Lifecycle state of the client's wire connection.
+ * High-level lifecycle status. The internal REST↔SSE state machine has more
+ * states (racing, rest_won, streaming, bridging, …) but consumers only care
+ * about whether the client has flags to give them.
  *
- * - `idle` — never connected; `initialFlags` may have populated `remoteFlags`.
- * - `loading` — one-shot REST in flight (from `load()` / `connect({ streaming: false })`).
- * - `racing` — REST + SSE both live; first to deliver wins.
- * - `rest_won` — REST resolved first; SSE still opening.
- * - `streaming` — SSE authoritative.
- * - `bridging` — SSE dropped from a settled state; fresh REST keeps flags warm.
- * - `closed` — `disconnect()` called or terminal failure. The next `connect()` /
- *   `load()` resets the connection.
+ * - `idle`    — never started, or stopped before any flags arrived.
+ * - `loading` — cold start in flight; no flags yet (and no `initialFlags`).
+ * - `ready`   — flags are available (from `initialFlags`, REST, or SSE).
+ *               Stays `ready` across silent refreshes — failures during a
+ *               refresh update `lastError` without flipping status.
+ * - `error`   — cold start failed and there are no flags to fall back on.
  */
-export type ConnectionStatus =
-  | "idle"
-  | "loading"
-  | "racing"
-  | "rest_won"
-  | "streaming"
-  | "bridging"
-  | "closed";
+export type ClientStatus = "idle" | "loading" | "ready" | "error";
 
 export interface VexilloClientConfig {
   baseUrl: string;
   apiKey: string;
-  /** Pre-resolved flags. When provided, isReady is true immediately. */
+  /** Pre-resolved flags. When provided, `isReady` is true immediately. */
   initialFlags?: Record<string, boolean>;
   /** Returned for unknown keys when no remote value exists. */
   fallbacks?: Record<string, boolean>;
-  /** Called on every wire error (one-shot REST, race REST, bridge REST). */
+
+  /**
+   * Wire mode. Default: `"rest"`.
+   *
+   * - `"rest"`   — one-shot fetch on `start()`; auto-refresh on focus by default.
+   * - `"stream"` — REST↔SSE race on cold start, SSE authoritative, REST bridge
+   *                on disconnect. Auto-refresh is ignored (SSE is authoritative).
+   */
+  mode?: "rest" | "stream";
+
+  /**
+   * Auto-refresh policy for REST mode. Default: `{ onFocus: true }`.
+   * Set `{ onFocus: false }` to disable focus-triggered refreshes (e.g. when
+   * driving refreshes manually from a router). Stream mode ignores this.
+   */
+  autoRefresh?: { onFocus?: boolean };
+
+  /** Called on every wire error (cold-start REST, race REST, bridge REST, refresh). */
   onError?: (err: Error) => void;
+
   /** @internal — escape hatch for tests. */
   fetch?: typeof fetch;
   /** @internal — escape hatch for tests. */
   createEventSource?: (opts: EventSourceOptions) => EventSourceClient;
+  /**
+   * @internal — escape hatch for tests. A focus-event source: takes a callback,
+   * returns an unsubscribe. The default wires `window.addEventListener("focus")`
+   * and is a no-op when `window` is undefined (SSR).
+   */
+  focusSignal?: (cb: () => void) => () => void;
 }
 
 export interface VexilloClient {
   /**
-   * @deprecated Prefer `connect({ streaming: false })`. One-shot REST fetch.
-   * Resolves when the request completes (success or failure). `isReady` flips
-   * to true on completion regardless of outcome.
+   * Begin the configured wire activity. Idempotent — calling repeatedly without
+   * an intervening `stop()` returns the existing stop handle and does not open
+   * a second connection. Returns a stop function; calling it tears down the
+   * wire and unsubscribes the focus listener (if any).
    */
-  load(): Promise<void>;
+  start(): () => void;
   /**
-   * @deprecated Prefer `connect()`. Opens a persistent SSE stream that races
-   * a REST fetch on cold start and keeps a bridge REST fresh on disconnect.
-   * Returns a disconnect function.
+   * Manual one-shot REST refresh. Fires regardless of `mode` — useful in
+   * stream mode for a forced refresh, or in REST mode with `autoRefresh.onFocus`
+   * disabled. Resolves once the request settles (success or failure).
    */
-  connectStream(): () => void;
-  /**
-   * Unified entry point. With `streaming: true` (default), races REST + SSE
-   * and bridges on disconnect. With `streaming: false`, fires a single REST
-   * fetch (no-op if `isReady` is already true). Returns a disconnect function.
-   */
-  connect(opts?: { streaming?: boolean }): () => void;
+  refresh(): Promise<void>;
+
   /** Synchronous read. Priority: overrides > remote > fallbacks > false. */
   getFlag(key: string): boolean;
   /** Snapshot of all resolved flags (overrides + remote + fallbacks merged). */
   getAllFlags(): Record<string, boolean>;
   /**
    * Subscribe to changes on a specific key. Fires on snapshot delivery,
-   * override(), and clearOverride(). Returns an unsubscribe function.
+   * `override()`, and `clearOverride()`. Returns an unsubscribe function.
    */
   subscribe(key: string, listener: (value: boolean) => void): () => void;
   /** Subscribe to any flag change. Returns an unsubscribe function. */
@@ -77,14 +90,15 @@ export interface VexilloClient {
   clearOverride(key: string): void;
   /** Remove all overrides and notify subscribers. */
   clearOverrides(): void;
+
   readonly isReady: boolean;
   readonly lastError: Error | null;
-  readonly connectionStatus: ConnectionStatus;
-  /** Subscribe to connection-status transitions. Returns an unsubscribe function. */
-  subscribeConnectionStatus(
-    listener: (status: ConnectionStatus) => void,
-  ): () => void;
+  readonly status: ClientStatus;
+  /** Subscribe to status transitions. Returns an unsubscribe function. */
+  subscribeStatus(listener: (status: ClientStatus) => void): () => void;
 }
+
+// ── Internal state machine ─────────────────────────────────────────────────
 
 type ConnState =
   | { kind: "idle" }
@@ -104,11 +118,20 @@ type Event =
   | { type: "SSE_DISCONNECTED" }
   | { type: "STOP" };
 
+const defaultFocusSignal = (cb: () => void): (() => void) => {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("focus", cb);
+  return () => window.removeEventListener("focus", cb);
+};
+
 export function createVexilloClient(config: VexilloClientConfig): VexilloClient {
   const { baseUrl, apiKey, fallbacks = {}, onError } = config;
+  const mode: "rest" | "stream" = config.mode ?? "rest";
+  const onFocus = config.autoRefresh?.onFocus ?? true;
   const fetchImpl: typeof fetch =
     config.fetch ?? globalThis.fetch.bind(globalThis);
   const makeEventSource = config.createEventSource ?? createEventSource;
+  const focusSignal = config.focusSignal ?? defaultFocusSignal;
 
   let remoteFlags: Record<string, boolean> = config.initialFlags ?? {};
   let overrides: Record<string, boolean> = {};
@@ -117,14 +140,18 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
 
   const keyListeners = new Map<string, Set<(value: boolean) => void>>();
   const allListeners = new Set<(flags: Record<string, boolean>) => void>();
-  const statusListeners = new Set<(s: ConnectionStatus) => void>();
+  const statusListeners = new Set<(s: ClientStatus) => void>();
 
   let conn: ConnState = { kind: "idle" };
-  const pendingLoadResolvers: Array<() => void> = [];
+  let publicStatus: ClientStatus = computeStatus();
+
+  // start()/stop() handle plus focus-listener teardown — owns the
+  // idempotency guarantee.
+  let activeStop: (() => void) | null = null;
 
   // Re-entrancy guard: a snapshot/status listener may synchronously trigger
-  // another dispatch (e.g. calling disconnect() inside subscribeAll). Queue
-  // those events so the outer reduce's state assignment isn't clobbered.
+  // another dispatch (e.g. calling stop() inside subscribeAll). Queue those
+  // events so the outer reduce's state assignment isn't clobbered.
   let dispatching = false;
   const queue: Event[] = [];
 
@@ -155,16 +182,33 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     for (const key of keyListeners.keys()) notifyKey(key);
   }
 
+  function computeStatus(): ClientStatus {
+    if (ready) return "ready";
+    if (error && conn.kind === "closed") return "error";
+    if (conn.kind === "idle" || conn.kind === "closed") return "idle";
+    return "loading"; // loading | racing
+  }
+
+  function publishStatus(): void {
+    const next = computeStatus();
+    if (next !== publicStatus) {
+      publicStatus = next;
+      for (const l of statusListeners) l(publicStatus);
+    }
+  }
+
   function applySnapshot(flags: Record<string, boolean>): void {
     remoteFlags = flags;
     error = null;
     ready = true;
     notifyAll();
+    publishStatus();
   }
 
   function reportError(err: Error): void {
     error = err;
     onError?.(err);
+    publishStatus();
   }
 
   function dispatch(event: Event): void {
@@ -176,14 +220,7 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
         const e = queue.shift() as Event;
         const prev = conn.kind;
         conn = reduce(conn, e);
-        if (conn.kind !== prev) {
-          for (const l of statusListeners) l(conn.kind);
-          // Drain load() promise resolvers when LOAD lifecycle settles.
-          if (prev === "loading" && pendingLoadResolvers.length > 0) {
-            const resolvers = pendingLoadResolvers.splice(0);
-            for (const r of resolvers) r();
-          }
-        }
+        if (conn.kind !== prev) publishStatus();
       }
     } finally {
       dispatching = false;
@@ -247,8 +284,6 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
       return { kind: "closed" };
     }
 
-    // Disconnect from a settled state bridges with a fresh REST. Other states
-    // either already have a REST in flight or are not active.
     if (e.type === "SSE_DISCONNECTED") {
       if (s.kind === "rest_won" || s.kind === "streaming") {
         return { kind: "bridging", es: s.es, rest: startRest() };
@@ -278,10 +313,6 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
         }
         if (e.type === "REST_FAILED") {
           reportError(e.err);
-          // BC: load() flips ready=true even on error so consumers stop
-          // showing a loading spinner and fall through to fallbacks.
-          ready = true;
-          notifyAll();
           return { kind: "closed" };
         }
         return s;
@@ -334,41 +365,65 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     }
   }
 
-  function load(): Promise<void> {
-    if (conn.kind !== "idle" && conn.kind !== "closed") {
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolveLoad) => {
-      pendingLoadResolvers.push(resolveLoad);
-      dispatch({ type: "LOAD" });
-    });
-  }
+  // ── Public lifecycle ─────────────────────────────────────────────────────
 
-  function connectStream(): () => void {
-    if (conn.kind === "idle" || conn.kind === "closed") {
-      dispatch({ type: "CONNECT" });
-    }
-    return () => {
-      if (conn.kind !== "closed") dispatch({ type: "STOP" });
-    };
-  }
+  function start(): () => void {
+    // Idempotent: a second start() without an intervening stop() returns the
+    // existing stop handle so React StrictMode double-mount doesn't open a
+    // second wire.
+    if (activeStop) return activeStop;
 
-  function connect(opts?: { streaming?: boolean }): () => void {
-    const streaming = opts?.streaming !== false;
-    if (streaming) {
+    if (mode === "stream") {
       if (conn.kind === "idle" || conn.kind === "closed") {
         dispatch({ type: "CONNECT" });
       }
-    } else if (
-      !ready &&
-      (conn.kind === "idle" || conn.kind === "closed")
-    ) {
-      dispatch({ type: "LOAD" });
+    } else {
+      // REST mode: cold-start fetch only when we don't already have flags.
+      if (!ready && (conn.kind === "idle" || conn.kind === "closed")) {
+        dispatch({ type: "LOAD" });
+      }
     }
-    return () => {
+
+    let unsubFocus: (() => void) | null = null;
+    if (mode === "rest" && onFocus) {
+      unsubFocus = focusSignal(() => {
+        void refresh();
+      });
+    }
+
+    const stop = (): void => {
+      if (activeStop !== stop) return; // already torn down
+      activeStop = null;
+      unsubFocus?.();
+      unsubFocus = null;
       if (conn.kind !== "closed") dispatch({ type: "STOP" });
     };
+    activeStop = stop;
+    return stop;
   }
+
+  // Independent one-shot REST. Does not touch the FSM — applies the snapshot
+  // (or reports the error) directly. Used for manual refreshes and as the
+  // focus-event handler in REST mode.
+  async function refresh(): Promise<void> {
+    try {
+      const res = await fetchImpl(`${baseUrl}/api/sdk/flags`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!res.ok) {
+        reportError(new Error(`REST: ${res.status}`));
+        return;
+      }
+      const data = (await res.json()) as {
+        flags: Array<{ key: string; enabled: boolean }>;
+      };
+      applySnapshot(flagsArrayToRecord(data.flags));
+    } catch (err) {
+      reportError(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  // ── Reads / subscriptions / overrides ────────────────────────────────────
 
   function getFlag(key: string): boolean {
     return resolve(key);
@@ -426,8 +481,8 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     for (const key of affected) notifyKey(key);
   }
 
-  function subscribeConnectionStatus(
-    listener: (s: ConnectionStatus) => void,
+  function subscribeStatus(
+    listener: (s: ClientStatus) => void,
   ): () => void {
     statusListeners.add(listener);
     return () => {
@@ -436,9 +491,8 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
   }
 
   return {
-    load,
-    connectStream,
-    connect,
+    start,
+    refresh,
     getFlag,
     getAllFlags,
     subscribe,
@@ -452,10 +506,10 @@ export function createVexilloClient(config: VexilloClientConfig): VexilloClient 
     get lastError() {
       return error;
     },
-    get connectionStatus() {
-      return conn.kind;
+    get status() {
+      return publicStatus;
     },
-    subscribeConnectionStatus,
+    subscribeStatus,
   };
 }
 
