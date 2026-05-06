@@ -7,6 +7,7 @@ import { createSdkAuthenticator } from './lib/sdk-authenticator';
 import { createDashboardRouter } from './routes/dashboard';
 import { createSuperAdminRouter } from './routes/superadmin';
 import { createOrgOAuthRouter } from './routes/org-oauth';
+import { createOrgOAuth } from './lib/org-oauth';
 import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
 import { createDashboardService, createServiceEffects } from './services/dashboard-service';
@@ -112,7 +113,13 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 
 // Per-org Okta OAuth — must be before the BetterAuth catch-all
-app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
+const orgOAuthService = createOrgOAuth({
+  db,
+  auth,
+  baseUrl: process.env.BETTER_AUTH_URL ?? '',
+  superAdminEmails: process.env.SUPER_ADMIN_EMAILS ?? '',
+});
+app.route('/api/auth/org-oauth', createOrgOAuthRouter(orgOAuthService));
 
 // Auth routes — BetterAuth handles /api/auth/* (session)
 app.all('/api/auth/*', (c) => auth.handler(c.req.raw));

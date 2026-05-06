@@ -94,6 +94,46 @@ export async function queryMemberRole(
   return row?.role ?? null;
 }
 
+/** Returns the membership row regardless of `removedAt`, so callers (JIT
+ *  provisioning) can distinguish "never a member" from "was a member, was
+ *  revoked." `queryMemberRole` filters removed members out — this one doesn't. */
+export async function queryOrgMembership(
+  db: DbClient,
+  orgId: string,
+  userId: string,
+): Promise<{ role: string; removedAt: Date | null } | null> {
+  const [row] = await db
+    .select({ role: organizationMembers.role, removedAt: organizationMembers.removedAt })
+    .from(organizationMembers)
+    .where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, userId)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function insertOrgMember(
+  db: DbClient,
+  args: { orgId: string; userId: string; role: 'admin' | 'viewer' },
+): Promise<void> {
+  await db.insert(organizationMembers).values(args);
+}
+
+/**
+ * Insert-or-overwrite a membership: super-admins get reinstated to admin even
+ * if they had been removed. Idempotent on repeated sign-ins.
+ */
+export async function upsertOrgMember(
+  db: DbClient,
+  args: { orgId: string; userId: string; role: 'admin' | 'viewer' },
+): Promise<void> {
+  await db
+    .insert(organizationMembers)
+    .values(args)
+    .onConflictDoUpdate({
+      target: [organizationMembers.orgId, organizationMembers.userId],
+      set: { role: args.role, removedAt: null },
+    });
+}
+
 export async function updateMemberRole(
   db: DbClient,
   orgId: string,
