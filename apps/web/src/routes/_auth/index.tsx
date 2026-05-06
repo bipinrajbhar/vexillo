@@ -2,8 +2,6 @@ import { useState, useEffect, useRef, useMemo, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { Plus, Search, ChevronDown, MoreHorizontal, Check, X, Minus } from 'lucide-react'
-import { toast } from 'sonner'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   useReactTable,
   getCoreRowModel,
@@ -52,23 +50,22 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useOrg } from '@/lib/org-context'
-import { api, type FlagRow, type EnvRef as Env } from '@/lib/api-client'
+import { useFlags } from '../../domain/flags/use-flags'
+import type { Environment, Flag } from '../../domain/flags/types'
 import { cn } from '@/lib/utils'
 
 // ── Edit Flag Dialog ─────────────────────────────────────────────────────────
 
 function EditFlagDialog({
   flag,
-  orgSlug,
   open,
   onOpenChange,
-  onSuccess,
+  onSave,
 }: {
-  flag: FlagRow | null
-  orgSlug: string
+  flag: Flag | null
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSuccess: () => void
+  onSave: (flag: Flag, patch: { name?: string; description?: string }) => Promise<void>
 }) {
   const [name, setName] = useState(flag?.name ?? '')
   const [description, setDescription] = useState(flag?.description ?? '')
@@ -86,15 +83,10 @@ function EditFlagDialog({
     if (!flag || !name.trim()) return
     setSaving(true)
     try {
-      await api.flags.patch(orgSlug, flag.key, {
-        name: name.trim(),
-        description: description.trim(),
-      })
-      onSuccess()
+      await onSave(flag, { name: name.trim(), description: description.trim() })
       onOpenChange(false)
-      toast.success('Flag updated')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update flag')
+    } catch {
+      // hook already toasted
     } finally {
       setSaving(false)
     }
@@ -416,34 +408,22 @@ function CountryPicker({
 
 function RolloutDialog({
   flag,
-  orgSlug,
   environments,
   isAdmin,
   open,
   onOpenChange,
-  onChanged,
+  onToggle,
 }: {
-  flag: FlagRow | null
-  orgSlug: string
-  environments: Env[]
+  flag: Flag | null
+  environments: readonly Environment[]
   isAdmin: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
-  onChanged: () => void
+  onToggle: (flag: Flag, env: Environment) => Promise<void>
 }) {
-  const [toggling, setToggling] = useState<string | null>(null)
-
-  async function handleToggle(env: Env) {
-    if (!flag || toggling) return
-    setToggling(env.id)
-    try {
-      await api.flags.toggle(orgSlug, flag.key, env.id)
-      onChanged()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update rollout')
-    } finally {
-      setToggling(null)
-    }
+  function handleToggle(env: Environment) {
+    if (!flag) return
+    void onToggle(flag, env)
   }
 
   return (
@@ -465,8 +445,7 @@ function RolloutDialog({
             <p className="py-10 text-center text-sm text-muted-foreground">No environments configured yet.</p>
           ) : (
             environments.map((env) => {
-              const isOn = !!(flag?.states[env.slug])
-              const isLoading = toggling === env.id
+              const isOn = !!flag?.isOnIn(env)
               return (
                 <div key={env.id} className="flex items-center justify-between gap-4 px-6 py-4">
                   <div className="space-y-0.5">
@@ -477,10 +456,9 @@ function RolloutDialog({
                   </div>
                   <Switch
                     checked={isOn}
-                    disabled={!isAdmin || !!toggling}
+                    disabled={!isAdmin}
                     aria-label={`Toggle ${flag?.name} in ${env.name}`}
                     onCheckedChange={() => handleToggle(env)}
-                    data-loading={isLoading}
                   />
                 </div>
               )
@@ -501,32 +479,36 @@ function RolloutDialog({
 
 // ── Targeting Dialog ──────────────────────────────────────────────────────────
 
-function deriveRule(flag: FlagRow | null, envIds: Set<string>, environments: Env[]) {
+function deriveRule(
+  flag: Flag | null,
+  envIds: Set<string>,
+  environments: readonly Environment[],
+) {
   const selected = environments.filter((e) => envIds.has(e.id))
   if (selected.length === 0) return { countries: [] as string[], allCountries: true }
   // If any selected env has no restriction, the union is "all countries"
-  const anyUnrestricted = selected.some((env) => (flag?.countryRules[env.slug] ?? []).length === 0)
+  const anyUnrestricted = selected.some((env) => !!flag?.isUnrestrictedIn(env))
   if (anyUnrestricted) return { countries: [] as string[], allCountries: true }
-  const union = Array.from(new Set(selected.flatMap((env) => flag?.countryRules[env.slug] ?? []))).sort()
+  const union = Array.from(
+    new Set(selected.flatMap((env) => (flag ? [...flag.countriesIn(env)] : []))),
+  ).sort()
   return { countries: union, allCountries: false }
 }
 
 function TargetingDialog({
   flag,
-  orgSlug,
   environments,
   isAdmin,
   open,
   onOpenChange,
-  onChanged,
+  onSetCountries,
 }: {
-  flag: FlagRow | null
-  orgSlug: string
-  environments: Env[]
+  flag: Flag | null
+  environments: readonly Environment[]
   isAdmin: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
-  onChanged: () => void
+  onSetCountries: (flag: Flag, env: Environment, countries: string[]) => Promise<void>
 }) {
   const [rule, setRule] = useState<{ countries: string[]; allCountries: boolean }>({ countries: [], allCountries: true })
   const [ruleTouched, setRuleTouched] = useState(false)
@@ -580,13 +562,12 @@ function TargetingDialog({
         environments
           .filter((env) => selectedEnvIds.has(env.id))
           .map((env) =>
-            api.flags.updateCountryRules(orgSlug, flag.key, env.id, rule.allCountries ? [] : rule.countries)
-          )
+            onSetCountries(flag, env, rule.allCountries ? [] : rule.countries),
+          ),
       )
-      onChanged()
       onOpenChange(false)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save')
+    } catch {
+      // hook already toasted
     } finally {
       setSaving(false)
     }
@@ -631,7 +612,7 @@ function TargetingDialog({
               </button>
 
               {environments.map((env) => {
-                const codes = flag?.countryRules[env.slug] ?? []
+                const codes = flag?.countriesIn(env) ?? []
                 const checked = selectedEnvIds.has(env.id)
                 return (
                   <button
@@ -701,15 +682,13 @@ function TargetingDialog({
 // ── Create Flag Dialog ───────────────────────────────────────────────────────
 
 function CreateFlagDialog({
-  orgSlug,
   open,
   onOpenChange,
-  onSuccess,
+  onCreate,
 }: {
-  orgSlug: string
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSuccess: () => void
+  onCreate: (input: { name: string; key: string; description: string }) => Promise<Flag>
 }) {
   const [name, setName] = useState('')
   const [key, setKey] = useState('')
@@ -735,19 +714,17 @@ function CreateFlagDialog({
 
     setSubmitting(true)
     try {
-      const { flag } = await api.flags.create(orgSlug, {
+      await onCreate({
         name: name.trim(),
         key: key.trim() || slugify(name),
         description: description.trim(),
       })
-      onSuccess()
       onOpenChange(false)
       setName('')
       setKey('')
       setDescription('')
-      toast.success(`Flag "${flag.name}" created`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create flag')
+    } catch {
+      // hook already toasted
     } finally {
       setSubmitting(false)
     }
@@ -834,35 +811,27 @@ const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeri
 export function FlagsPage() {
   const { org, role } = useOrg()
   const isAdmin = role === 'admin'
-  const queryClient = useQueryClient()
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [flagToDelete, setFlagToDelete] = useState<FlagRow | null>(null)
-  const [flagToEdit, setFlagToEdit] = useState<FlagRow | null>(null)
-  const [flagToRollout, setFlagToRollout] = useState<FlagRow | null>(null)
-  const [flagToTarget, setFlagToTarget] = useState<FlagRow | null>(null)
+  const [flagToDelete, setFlagToDelete] = useState<Flag | null>(null)
+  const [flagToEdit, setFlagToEdit] = useState<Flag | null>(null)
+  const [flagToRollout, setFlagToRollout] = useState<Flag | null>(null)
+  const [flagToTarget, setFlagToTarget] = useState<Flag | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['flags', org.slug],
-    queryFn: () => api.flags.list(org.slug),
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (flag: FlagRow) => api.flags.delete(org.slug, flag.key),
-    onSuccess: (_, flag) => {
-      queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })
-      toast.success(`Flag "${flag.name}" deleted`)
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete flag')
-    },
-  })
-
-  const environments = data?.environments ?? []
-  const flagsList = data?.flags ?? []
+  const {
+    flags: flagsList,
+    environments,
+    isLoading,
+    error,
+    create,
+    edit,
+    remove,
+    toggle,
+    setCountries,
+  } = useFlags(org.slug)
 
   useEffect(() => {
     if (envFilter === '' && environments.length) {
@@ -881,7 +850,7 @@ export function FlagsPage() {
         }
       }
       if (statusFilter !== 'all') {
-        const isOn = selectedEnv ? !!flag.states[selectedEnv.slug] : null
+        const isOn = selectedEnv ? flag.isOnIn(selectedEnv) : null
         if (statusFilter === 'on' && isOn !== true) return false
         if (statusFilter === 'off' && isOn !== false) return false
       }
@@ -889,7 +858,7 @@ export function FlagsPage() {
     })
   }, [flagsList, searchQuery, statusFilter, selectedEnv])
 
-  const columns = useMemo<ColumnDef<FlagRow>[]>(
+  const columns = useMemo<ColumnDef<Flag>[]>(
     () => [
       {
         accessorKey: 'name',
@@ -905,7 +874,7 @@ export function FlagsPage() {
                 <p className="text-xs text-muted-foreground max-w-sm">{flag.description}</p>
               )}
               <p className="text-xs text-muted-foreground pt-0.5">
-                {flag.createdByName ?? 'Unknown'} · {DATE_FMT.format(new Date(flag.createdAt))}
+                {flag.createdByName ?? 'Unknown'} · {DATE_FMT.format(flag.createdAt)}
               </p>
             </div>
           )
@@ -916,7 +885,7 @@ export function FlagsPage() {
         header: 'Status',
         size: 100,
         cell: ({ row }) => {
-          const isOn = selectedEnv ? !!row.original.states[selectedEnv.slug] : null
+          const isOn = selectedEnv ? row.original.isOnIn(selectedEnv) : null
           return isOn === null ? (
             <span className="text-muted-foreground">—</span>
           ) : (
@@ -966,7 +935,7 @@ export function FlagsPage() {
         },
       },
     ],
-    [org.slug, selectedEnv, isAdmin]
+    [selectedEnv, isAdmin]
   )
 
   const table = useReactTable({
@@ -1060,7 +1029,7 @@ export function FlagsPage() {
           className="mb-8 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           role="alert"
         >
-          {error instanceof Error ? error.message : 'Failed to load flags'}
+          {error.message}
         </div>
       )}
 
@@ -1171,38 +1140,34 @@ export function FlagsPage() {
       )}
 
       <CreateFlagDialog
-        orgSlug={org.slug}
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+        onCreate={create}
       />
 
       <RolloutDialog
         flag={flagToRollout ? (flagsList.find(f => f.id === flagToRollout.id) ?? flagToRollout) : null}
-        orgSlug={org.slug}
         environments={environments}
         isAdmin={isAdmin}
         open={!!flagToRollout}
         onOpenChange={(v) => { if (!v) setFlagToRollout(null) }}
-        onChanged={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+        onToggle={toggle}
       />
 
       <TargetingDialog
-        flag={flagToTarget}
-        orgSlug={org.slug}
+        flag={flagToTarget ? (flagsList.find(f => f.id === flagToTarget.id) ?? flagToTarget) : null}
         environments={environments}
         isAdmin={isAdmin}
         open={!!flagToTarget}
         onOpenChange={(v) => { if (!v) setFlagToTarget(null) }}
-        onChanged={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+        onSetCountries={setCountries}
       />
 
       <EditFlagDialog
         flag={flagToEdit}
-        orgSlug={org.slug}
         open={!!flagToEdit}
         onOpenChange={(v) => { if (!v) setFlagToEdit(null) }}
-        onSuccess={() => queryClient.invalidateQueries({ queryKey: ['flags', org.slug] })}
+        onSave={edit}
       />
 
 
@@ -1219,8 +1184,9 @@ export function FlagsPage() {
             <AlertDialogAction
               onClick={() => {
                 if (flagToDelete) {
+                  const f = flagToDelete
                   setFlagToDelete(null)
-                  deleteMutation.mutate(flagToDelete)
+                  void remove(f)
                 }
               }}
             >
