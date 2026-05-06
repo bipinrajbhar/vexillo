@@ -14,14 +14,22 @@ import { createFlagOps, type FlagOps } from './index';
 
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
-function spySdkAuth(): SdkAuthenticator & { evictedEnvIds: string[] } {
+function spySdkAuth(): SdkAuthenticator & {
+  evictedEnvIds: string[];
+  forgottenEnvIds: string[];
+} {
   const evictedEnvIds: string[] = [];
+  const forgottenEnvIds: string[] = [];
   return {
     authenticate: async () => ({ ok: false, status: 401, reason: 'missing_token' }),
     evictByEnvironment(envId) {
       evictedEnvIds.push(envId);
     },
+    forgetEnvironment(envId) {
+      forgottenEnvIds.push(envId);
+    },
     evictedEnvIds,
+    forgottenEnvIds,
   };
 }
 
@@ -295,7 +303,7 @@ describe('FlagOps.commit — env.origins_updated', () => {
 });
 
 describe('FlagOps.commit — env.deleted', () => {
-  it('evicts the SDK auth cache for that environment (closes the previous gap)', async () => {
+  it('forgets the environment in the SDK authenticator (cleans up the generations table)', async () => {
     const { flagOps, sdkAuth, seed } = await setup();
 
     await flagOps.commit({
@@ -305,7 +313,10 @@ describe('FlagOps.commit — env.deleted', () => {
       environmentId: seed.environmentId,
     });
 
-    expect(sdkAuth.evictedEnvIds).toEqual([seed.environmentId]);
+    expect(sdkAuth.forgottenEnvIds).toEqual([seed.environmentId]);
+    // env.deleted is a stronger statement than evict — `forget` reclaims the
+    // generations-table entry. We deliberately don't also call evict here.
+    expect(sdkAuth.evictedEnvIds).toEqual([]);
   });
 });
 

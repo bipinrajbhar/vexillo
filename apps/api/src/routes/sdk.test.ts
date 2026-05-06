@@ -18,6 +18,7 @@ function stubAuthenticator(result: AuthResult): SdkAuthenticator {
   return {
     authenticate: async () => result,
     evictByEnvironment: () => {},
+    forgetEnvironment: () => {},
   };
 }
 
