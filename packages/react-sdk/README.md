@@ -37,7 +37,7 @@ npm install @vexillo/react-sdk
 
 ## SPA
 
-For client-side only apps (Create React App, Vite, etc.). Flags are fetched on mount; components read them with `useFlag`.
+For client-side only apps (Create React App, Vite, etc.). The default `mode: "rest"` fetches once on mount and refreshes on window focus; components read flags with `useFlag`.
 
 **1. Create a client**
 
@@ -48,6 +48,8 @@ import { createVexilloClient } from "@vexillo/react-sdk";
 export const client = createVexilloClient({
   baseUrl: "https://your-vexillo.example.com",
   apiKey: "your-api-key",
+  // mode: "rest" is the default — one-shot fetch + auto-refresh on focus.
+  // Set autoRefresh: { onFocus: false } to disable focus-triggered refreshes.
 });
 ```
 
@@ -66,6 +68,8 @@ export default function App() {
 }
 ```
 
+The provider calls `client.start()` on mount and the returned `stop` on unmount — wire mode is configured on the client, not the provider.
+
 **3. Read flags in components**
 
 ```tsx
@@ -80,64 +84,75 @@ export function CheckoutButton() {
 }
 ```
 
-`useFlag` returns `[value, isLoading]`. The component re-renders only when the value of that specific flag changes.
+`useFlag` returns `[value, isLoading]`. `isLoading` is `true` only during the cold-start fetch (when there are no `initialFlags`); it flips to `false` on the first snapshot **and** on cold-start failure — branch on `client.status === "error"` if you need to distinguish the two. The component re-renders on changes to that specific key and on status transitions.
 
 ---
 
 ## Real-time streaming
 
-Pass `streaming` to `<VexilloClientProvider>` to open a persistent SSE connection. Components update automatically whenever a flag is toggled in the dashboard — no polling, no page reload.
+Set `mode: "stream"` on the client to open a persistent SSE connection. Components update automatically whenever a flag is toggled in the dashboard — no polling, no page reload.
 
-```tsx
-import { VexilloClientProvider } from "@vexillo/react-sdk";
-import { client } from "@/lib/vexillo";
+```ts
+import { createVexilloClient } from "@vexillo/react-sdk";
 
-export default function App() {
-  return (
-    <VexilloClientProvider client={client} streaming>
-      <MyApp />
-    </VexilloClientProvider>
-  );
-}
+export const client = createVexilloClient({
+  baseUrl: "https://your-vexillo.example.com",
+  apiKey: "your-api-key",
+  mode: "stream",
+});
 ```
+
+The provider does not change — `<VexilloClientProvider client={client}>` works the same in both modes.
 
 **How it works**
 
-- On mount the provider calls `client.connectStream()`.
-- Before opening the SSE connection, the client fetches flags via `GET /api/sdk/flags` (CDN-cached, typically resolves in under 50 ms). This means `isReady` becomes `true` and components render with real flag values before the SSE handshake completes.
-- Once the SSE connection is established, the server immediately sends the full flag snapshot, overwriting the cached REST response with the authoritative live state.
+- On mount the provider calls `client.start()`.
+- In `mode: "stream"` the client races a REST fetch (`GET /api/sdk/flags`, CDN-cached, typically < 50 ms) against the SSE handshake. Whichever resolves first hydrates flags so `useFlag` can render real values immediately; if REST wins, the first SSE snapshot then overwrites the REST response with the authoritative live state.
 - The server pushes a new snapshot whenever a flag is toggled.
 - The connection sends a keepalive comment every 25 seconds so proxies and firewalls don't close idle connections.
-- If the connection drops, the client reconnects automatically with exponential backoff (base delay controlled by the server's `retry:` field, up to 30 s). The REST prefetch is skipped on reconnects — flags are already known.
-- On every reconnect the client sends a `Last-Event-ID` header so the server can continue the event ID sequence.
-- On unmount the provider closes the connection cleanly.
+- If the SSE connection drops mid-stream, the client transitions into a `bridging` state — it kicks off a one-shot REST refresh to keep flags fresh while the underlying `EventSource` reconnects, then resumes streaming once SSE is back. On every reconnect the client sends a `Last-Event-ID` header so the server can continue the event ID sequence.
+- On unmount the provider's stop function aborts the in-flight REST request and closes the SSE connection.
+- `autoRefresh.onFocus` is ignored in stream mode — SSE is authoritative.
 
-**Using the disconnect function directly**
+**Manual refresh**
 
-If you manage connection lifecycle outside React, call `connectStream()` yourself:
+Force a one-shot REST refresh at any time:
 
 ```ts
-const disconnect = client.connectStream();
-
-// later — e.g. when the user signs out
-disconnect();
+await client.refresh();
 ```
 
-**Error handling during streaming**
+This works in both modes — useful for "Refresh flags" debug buttons or for driving refreshes from a router instead of focus events.
 
-Stream errors (network drops, non-2xx responses) are surfaced the same way as `load()` errors:
+**Lifecycle outside React**
+
+If you manage lifecycle outside React, call `start()` yourself:
+
+```ts
+const stop = client.start();
+
+// later — e.g. when the user signs out
+stop();
+```
+
+`start()` is idempotent: calling it again without an intervening `stop()` returns the same handle and does not open a second connection (so React StrictMode double-mount is safe).
+
+**Error handling**
+
+Wire errors (cold-start REST, race REST, bridge REST, SSE) are surfaced via `onError` and `client.lastError`:
 
 ```ts
 const client = createVexilloClient({
   baseUrl: "https://your-vexillo.example.com",
   apiKey: "your-api-key",
+  mode: "stream",
   onError: (err) => {
-    console.error("Stream error:", err);
+    console.error("Wire error:", err);
   },
 });
 ```
 
-The client retries automatically after every error, so `onError` is informational — you do not need to reconnect manually.
+The client retries automatically after every error, so `onError` is informational — you do not need to reconnect manually. A successful refresh during a `bridging` window clears `lastError` without flipping `status` away from `ready`.
 
 ---
 
@@ -188,7 +203,7 @@ export function CheckoutButton() {
 }
 ```
 
-> When `initialFlags` is provided and `streaming` is also set, `connectStream()` skips the REST prefetch (flags are already ready) and opens the SSE connection directly.
+> When `initialFlags` is provided and `mode: "stream"` is set, the client skips the cold-start REST race (flags are already ready) and opens the SSE connection directly. The first SSE snapshot then overwrites the seeded flags with the authoritative live state.
 
 ---
 
@@ -307,9 +322,11 @@ afterEach(() => {
 |---|---|---|---|
 | `baseUrl` | `string` | Yes | Base URL of your Vexillo deployment |
 | `apiKey` | `string` | Yes | API key for authentication |
-| `initialFlags` | `Record<string, boolean>` | No | Pre-seed flags and skip the initial fetch |
+| `initialFlags` | `Record<string, boolean>` | No | Pre-resolved flags. When provided, `status` starts at `"ready"` and the cold-start fetch is skipped |
 | `fallbacks` | `Record<string, boolean>` | No | Default values for unknown keys |
-| `onError` | `(err: Error) => void` | No | Called when `load()` or `connectStream()` encounters an error |
+| `mode` | `"rest" \| "stream"` | No | Wire mode. Default `"rest"` (one-shot fetch + focus-triggered refresh). `"stream"` races REST against SSE on cold start, then keeps an SSE connection open with REST as a bridge during reconnects |
+| `autoRefresh` | `{ onFocus?: boolean }` | No | REST-mode policy. Default `{ onFocus: true }`. Stream mode ignores this |
+| `onError` | `(err: Error) => void` | No | Called on every wire error (cold-start REST, race REST, bridge REST, refresh) |
 
 ### `<VexilloClientProvider>`
 
@@ -317,15 +334,16 @@ afterEach(() => {
 |---|---|---|---|
 | `client` | `VexilloClient` | Yes | Client instance to provide to the tree |
 | `children` | `ReactNode` | Yes | |
-| `streaming` | `boolean` | No | When `true`, opens a persistent SSE connection via `connectStream()` instead of a one-time `load()`. Components update in real time when flags change. |
+
+The provider calls `client.start()` on mount and the returned stop on unmount. Wire mode lives on the client config, not the provider.
 
 ### `useFlag(key)`
 
-Returns `[value: boolean, isLoading: boolean]`. Must be called inside a `<VexilloClientProvider>`.
+Returns `[value: boolean, isLoading: boolean]`. Must be called inside a `<VexilloClientProvider>`. Re-renders on this key's value changes and on status transitions.
 
 ### `useVexilloClient()`
 
-Returns the `VexilloClient` instance from context. Use this for imperative access inside components — e.g. calling `override()`, `getAllFlags()`, or reading `isReady` directly.
+Returns the `VexilloClient` instance from context. Use this for imperative access inside components — e.g. calling `override()`, `getAllFlags()`, or reading `status` directly.
 
 ```tsx
 import { useVexilloClient } from "@vexillo/react-sdk";
@@ -346,17 +364,19 @@ Low-level fetch helper. Returns a flat `Record<string, boolean>`, or an empty ob
 
 | Member | Type | Description |
 |---|---|---|
-| `isReady` | `boolean` | `true` once flags have been loaded — either from `initialFlags`, a `load()` call, the REST prefetch inside `connectStream()`, or the first SSE snapshot |
-| `lastError` | `Error \| null` | The error from the most recent failed `load()` or stream attempt, or `null` |
-| `load()` | `() => Promise<void>` | Fetches flags from the API. Called automatically by `<VexilloClientProvider>` on mount (unless `streaming` is set) |
-| `connectStream()` | `() => () => void` | Fetches flags via REST, then opens a persistent SSE connection for real-time updates. Returns a disconnect function. Called automatically by `<VexilloClientProvider streaming>` |
-| `getFlag(key)` | `(key: string) => boolean` | Synchronous flag read |
-| `getAllFlags()` | `() => Record<string, boolean>` | Snapshot of all resolved flags |
+| `status` | `"idle" \| "loading" \| "ready" \| "error"` | Lifecycle status. `idle` = never started; `loading` = cold start in flight with no flags; `ready` = flags available (stays `ready` across silent refreshes); `error` = cold start failed and there are no flags to fall back on |
+| `isReady` | `boolean` | `true` once flags have been resolved (kept for ergonomic checks; equivalent to `status === "ready"`) |
+| `lastError` | `Error \| null` | The error from the most recent failed wire attempt, or `null`. Cleared on the next successful snapshot |
+| `start()` | `() => () => void` | Begin the configured wire activity. Idempotent. Returns a stop function that aborts in-flight requests and closes any SSE connection. Called automatically by `<VexilloClientProvider>` |
+| `refresh()` | `() => Promise<void>` | One-shot REST refresh. Works in both modes — useful for forced refreshes or as the focus handler when `autoRefresh.onFocus` is disabled |
+| `getFlag(key)` | `(key: string) => boolean` | Synchronous flag read. Priority: overrides > remote > fallbacks > false |
+| `getAllFlags()` | `() => Record<string, boolean>` | Snapshot of all resolved flags (overrides + remote + fallbacks merged) |
 | `override(flags)` | `(flags: Record<string, boolean>) => void` | Force flag values and notify subscribers |
 | `clearOverride(key)` | `(key: string) => void` | Remove override for a specific key |
 | `clearOverrides()` | `() => void` | Remove all overrides |
 | `subscribe(key, fn)` | `(key: string, fn: (value: boolean) => void) => () => void` | Subscribe to a specific flag key. Returns unsubscribe |
 | `subscribeAll(fn)` | `(fn: (flags: Record<string, boolean>) => void) => () => void` | Subscribe to any flag change. Returns unsubscribe |
+| `subscribeStatus(fn)` | `(fn: (status: ClientStatus) => void) => () => void` | Subscribe to status transitions. Returns unsubscribe |
 
 ### `createMockVexilloClient(options?)`
 
@@ -369,11 +389,12 @@ Low-level fetch helper. Returns a flat `Record<string, boolean>`, or an empty ob
 
 ## Error handling
 
-`load()` and `connectStream()` failures (network errors, non-2xx responses) are caught silently — flags will never crash your app. When a load fails:
+Wire failures (network errors, non-2xx responses) are caught silently — flags will never crash your app. When a fetch fails:
 
 - `useFlag` falls back to `fallbacks[key] ?? false`
 - `client.lastError` is set to the error
 - The `onError` callback is called if provided
+- `client.status` becomes `"error"` only if the **cold start** failed and there are no flags to fall back on. Refresh and bridge-REST failures update `lastError` without flipping `status` away from `ready`.
 
 ```ts
 const client = createVexilloClient({
