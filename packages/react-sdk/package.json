@@ -41,5 +41,8 @@
     "tsup": "^8",
     "typescript": "^5",
     "vitest": "^3"
+  },
+  "dependencies": {
+    "eventsource-parser": "^3.0.8"
   }
 }
