@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { Scalar } from '@scalar/hono-api-reference';
 import { createSdkRouter, SDK_OPENAPI_CONFIG } from './sdk';
+import { createFlagBus, createInMemoryInterContainerBus } from '../lib/flag-bus';
 
 // Minimal mock DB that satisfies the shape used by createSdkRouter.
 // All queries return empty arrays — used for error-path tests.
@@ -478,21 +479,17 @@ describe('GET /api/sdk/flags/stream', () => {
     await reader.cancel();
   });
 
-  it('applies per-connection geo evaluation when streamRegistry broadcasts a country-rules update', async () => {
-    let capturedSend: ((payload: string) => void) | null = null;
-    const mockRegistry = {
-      register: (_envId: string, send: (payload: string) => void) => {
-        capturedSend = send;
-        return () => {};
-      },
-      broadcast: () => {},
-    };
+  it('applies per-connection geo evaluation when the bus delivers a country-rules update', async () => {
+    const flagBus = createFlagBus({
+      interContainer: createInMemoryInterContainerBus(),
+      fanoutToRegions: () => {},
+    });
 
     const db = makeSdkQueueDb([
       [authRow()],
       [{ key: 'geo-flag', enabled: false, allowedCountries: [] }],
     ]);
-    const sdkRouter = createSdkRouter(db, mockRegistry as Parameters<typeof createSdkRouter>[1]);
+    const sdkRouter = createSdkRouter(db, flagBus);
     const app = new Hono();
     app.get('/health', (c) => c.json({ status: 'ok' }));
     app.route('/api/sdk', sdkRouter);
@@ -518,7 +515,10 @@ describe('GET /api/sdk/flags/stream', () => {
     expect(initData.flags).toEqual([{ key: 'geo-flag', enabled: false }]);
 
     // Simulate a country-rules update: geo-flag now whitelists US
-    capturedSend!(JSON.stringify({ flags: [{ key: 'geo-flag', enabled: false, allowedCountries: ['US'] }] }));
+    await flagBus.publishLocal(
+      'env-1',
+      JSON.stringify({ flags: [{ key: 'geo-flag', enabled: false, allowedCountries: ['US'] }] }),
+    );
 
     // The update should be geo-evaluated: US is in the list → enabled: true
     const { value: updVal } = await reader.read();

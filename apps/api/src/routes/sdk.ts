@@ -3,11 +3,9 @@ import { eq } from 'drizzle-orm';
 import { apiKeys, environments, organizations, queryEnvironmentFlagStates } from '@vexillo/db';
 import type { DbClient } from '@vexillo/db';
 import { hashKey } from '../lib/api-key';
-import { createSnapshotCache } from '../lib/snapshot-cache';
 import { evaluateCountryRule } from '../lib/evaluate-country-rule';
-import type { StreamRegistry } from '../lib/stream-registry';
+import { createFlagBus, createInMemoryInterContainerBus, type FlagBus } from '../lib/flag-bus';
 import type { AuthCache, AuthEntry } from '../lib/auth-cache';
-import type { SnapshotCache } from '../lib/snapshot-cache';
 
 // CORS headers used on pre-env-lookup error responses (401, env-not-found 403).
 // We use * here because we don't yet know the environment's allowedOrigins, but
@@ -111,22 +109,22 @@ async function resolveAuth(
 }
 
 // Returns the raw flag snapshot for an environment (JSON string including
-// allowedCountries for geo evaluation). Uses snapshotCache as the source of
-// truth — it is updated on every flag toggle via notifyFlagChange, so DB is
-// only hit on a cold miss. Stale entries are served immediately with a
+// allowedCountries for geo evaluation). The bus's snapshot cache is the source
+// of truth — it is updated on every flag toggle via flagBus.publishLocal, so
+// DB is only hit on a cold miss. Stale entries are served immediately with a
 // background refresh so TTL expiry never causes a synchronous latency spike.
 async function resolveRawSnapshot(
   db: DbClient,
   orgId: string,
   environmentId: string,
-  snapshotCache: SnapshotCache,
+  flagBus: FlagBus,
 ): Promise<string> {
-  const cached = snapshotCache.get(environmentId);
+  const cached = flagBus.readSnapshot(environmentId);
   if (cached) {
-    if (snapshotCache.isStale(environmentId)) {
+    if (flagBus.isSnapshotStale(environmentId)) {
       queryEnvironmentFlagStates(db, orgId, environmentId)
         .then((rows) => {
-          snapshotCache.set(environmentId, JSON.stringify({ flags: rows }));
+          flagBus.cacheSnapshot(environmentId, JSON.stringify({ flags: rows }));
         })
         .catch(() => {});
     }
@@ -134,7 +132,7 @@ async function resolveRawSnapshot(
   }
   const rows = await queryEnvironmentFlagStates(db, orgId, environmentId);
   const snapshot = JSON.stringify({ flags: rows });
-  snapshotCache.set(environmentId, snapshot);
+  flagBus.cacheSnapshot(environmentId, snapshot);
   return snapshot;
 }
 
@@ -196,13 +194,17 @@ const getFlagsRoute = createRoute({
 
 export function createSdkRouter(
   db: DbClient,
-  streamRegistry?: StreamRegistry,
+  flagBus?: FlagBus,
   authCache?: AuthCache,
-  snapshotCache?: SnapshotCache,
 ) {
-  // Default internal cache when none is injected (e.g. in tests). Production
-  // passes in a shared instance so the cache is invalidated by notifyFlagChange.
-  const _snapshotCache = snapshotCache ?? createSnapshotCache();
+  // Default in-memory bus when none is injected (e.g. in tests). Production
+  // passes in a shared instance so the cache is invalidated by publishLocal.
+  const _flagBus =
+    flagBus ??
+    createFlagBus({
+      interContainer: createInMemoryInterContainerBus(),
+      fanoutToRegions: () => {},
+    });
 
   const sdk = new OpenAPIHono();
 
@@ -279,7 +281,7 @@ export function createSdkRouter(
     // CloudFront injects this header; absent in local dev and CI → falls back to envEnabled.
     const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
 
-    const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _snapshotCache);
+    const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _flagBus);
     const snapshot = evaluateSnapshot(rawSnapshot, countryCode);
 
     return new Response(snapshot, {
@@ -321,8 +323,8 @@ export function createSdkRouter(
 
     // Capture viewer country at connection time for per-connection geo evaluation.
     const countryCode = c.req.header('cloudfront-viewer-country') ?? null;
-    // Snapshot: updated on every flag toggle via notifyFlagChange; DB only on cold miss.
-    const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _snapshotCache);
+    // Snapshot: updated on every flag toggle via flagBus.publishLocal; DB only on cold miss.
+    const rawSnapshot = await resolveRawSnapshot(db, auth.orgId, auth.environmentId, _flagBus);
 
     const encoder = new TextEncoder();
 
@@ -373,13 +375,11 @@ export function createSdkRouter(
     // reconnect delay without waiting for a failed attempt.
     await writer.write(buildEvent(evaluateSnapshot(rawSnapshot, countryCode), 1000));
 
-    if (streamRegistry) {
-      unregisterStream = streamRegistry.register(auth.environmentId, (payload) => {
-        // Each connection evaluates geo independently so different viewer
-        // countries see the correct enabled state for their location.
-        writer.write(buildEvent(evaluateSnapshot(payload, countryCode))).catch(() => {});
-      });
-    }
+    unregisterStream = _flagBus.registerListener(auth.environmentId, (payload) => {
+      // Each connection evaluates geo independently so different viewer
+      // countries see the correct enabled state for their location.
+      writer.write(buildEvent(evaluateSnapshot(payload, countryCode))).catch(() => {});
+    });
 
     keepaliveInterval = setInterval(() => {
       writer.write(encoder.encode(': keepalive\n\n')).catch(() => {});
