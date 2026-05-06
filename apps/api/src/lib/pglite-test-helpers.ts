@@ -119,3 +119,58 @@ export async function seedSdk(
 
   return { orgId: org.id, environmentId: env.id, apiKey: apiKeyValue, flagId };
 }
+
+export type OrgMemberSeed = {
+  orgId: string;
+  userId: string;
+  slug: string;
+};
+
+export type OrgMemberSeedOptions = {
+  slug?: string;
+  status?: 'active' | 'suspended';
+  role?: 'admin' | 'viewer';
+};
+
+/**
+ * Seeds a single org plus a user with an active membership row. Used by tests
+ * that exercise org-context resolution end-to-end against PGLite. The user row
+ * is required because `organization_members.user_id` has a FK to `user`.
+ */
+export async function seedOrgWithMember(
+  db: DbClient,
+  opts: OrgMemberSeedOptions = {},
+): Promise<OrgMemberSeed> {
+  const slug = opts.slug ?? `test-${crypto.randomUUID().slice(0, 8)}`;
+  const userId = `user-${crypto.randomUUID()}`;
+
+  const [org] = await db
+    .insert(schema.organizations)
+    .values({
+      name: 'Test Org',
+      slug,
+      oktaClientId: 'okta-client',
+      oktaClientSecret: 'okta-secret',
+      oktaIssuer: 'https://example.okta.com',
+      status: opts.status ?? 'active',
+    })
+    .returning({ id: schema.organizations.id });
+
+  const now = new Date();
+  await db.insert(schema.authUser).values({
+    id: userId,
+    name: 'Test User',
+    email: `${userId}@example.com`,
+    emailVerified: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await db.insert(schema.organizationMembers).values({
+    orgId: org.id,
+    userId,
+    role: opts.role ?? 'admin',
+  });
+
+  return { orgId: org.id, userId, slug };
+}
