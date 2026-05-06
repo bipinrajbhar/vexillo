@@ -121,7 +121,15 @@ function resolveSseOk(p: PendingFetch, reader: FakeReader): void {
 
 function snapshotChunk(flags: Record<string, boolean>): string {
   const arr = Object.entries(flags).map(([key, enabled]) => ({ key, enabled }));
-  return `data: ${JSON.stringify({ flags: arr })}\n`;
+  return `data: ${JSON.stringify({ flags: arr })}\n\n`;
+}
+
+function idAndSnapshotChunk(
+  id: string,
+  flags: Record<string, boolean>,
+): string {
+  const arr = Object.entries(flags).map(([key, enabled]) => ({ key, enabled }));
+  return `id: ${id}\ndata: ${JSON.stringify({ flags: arr })}\n\n`;
 }
 
 async function flush(times = 6): Promise<void> {
@@ -373,9 +381,7 @@ describe("createStreamConnection", () => {
       (sseReq1.init.headers as Record<string, string>)["Last-Event-ID"],
     ).toBeUndefined();
 
-    reader1.push("id: 17\n");
-    await flush();
-    reader1.push(snapshotChunk({ a: true }));
+    reader1.push(idAndSnapshotChunk("17", { a: true }));
     await flush();
 
     reader1.errorOut(new Error("e"));

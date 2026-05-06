@@ -1,64 +1,54 @@
 /**
- * Pure SSE byte/line parser. Buffers partial lines across chunks and emits
- * one event per recognised field. Never throws.
+ * Thin adapter around `eventsource-parser` that flattens a dispatched
+ * `EventSourceMessage` into the `ParsedEvent`s our state machine consumes.
  *
- * Recognised fields (each must end with `\n`):
- *   `id: <value>`          — sets lastEventId; emits `{ kind: 'id' }`
- *   `retry: <ms>`          — emits `{ kind: 'retry', ms }` (parsed integer)
- *   `data: <json>`         — emits `{ kind: 'snapshot', flags }` if the JSON
- *                            shape is `{ flags: Array<{ key, enabled }> }`;
- *                            silently dropped on parse failure
+ * Behaviour delegated to the library:
+ *   - Line buffering across chunk boundaries (incl. multi-byte char splits)
+ *   - SSE field grammar (`id:`, `retry:`, `data:`, comments, blank-line dispatch)
+ *   - Multi-line `data:` joining, named events, `\r` / `\r\n` / `\n` endings
  *
- * Comments (`:keepalive`), blank lines, and unknown fields are skipped.
+ * Behaviour we still own:
+ *   - JSON-parsing the dispatched `data` payload into `{ key: enabled }`
+ *   - Dropping malformed payloads silently (never throw)
  */
 
-export interface ParserState {
-  buf: string;
-  lastEventId: string | null;
-}
+import { createParser } from "eventsource-parser";
 
 export type ParsedEvent =
   | { kind: "id"; value: string }
   | { kind: "retry"; ms: number }
   | { kind: "snapshot"; flags: Record<string, boolean> };
 
-export function makeInitialParserState(
-  lastEventId: string | null = null,
-): ParserState {
-  return { buf: "", lastEventId };
+export interface SseParser {
+  feed(chunk: string): ParsedEvent[];
 }
 
-export function feedSse(
-  state: ParserState,
-  chunk: string,
-): { state: ParserState; events: ParsedEvent[] } {
-  const combined = state.buf + chunk;
-  const lines = combined.split("\n");
-  const remaining = lines.pop() ?? "";
-  const events: ParsedEvent[] = [];
-  let lastEventId = state.lastEventId;
+export function createSseParser(): SseParser {
+  let pending: ParsedEvent[] = [];
 
-  for (const rawLine of lines) {
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+  const parser = createParser({
+    onEvent(msg) {
+      if (msg.id) pending.push({ kind: "id", value: msg.id });
+      const snapshot = parseSnapshot(msg.data);
+      if (snapshot) pending.push({ kind: "snapshot", flags: snapshot });
+    },
+    onRetry(ms) {
+      pending.push({ kind: "retry", ms });
+    },
+  });
 
-    if (line.startsWith("id: ")) {
-      const value = line.slice(4).trim();
-      lastEventId = value;
-      events.push({ kind: "id", value });
-    } else if (line.startsWith("retry: ")) {
-      const ms = parseInt(line.slice(7), 10);
-      if (!isNaN(ms)) events.push({ kind: "retry", ms });
-    } else if (line.startsWith("data: ")) {
-      const snapshot = parseSnapshot(line.slice(6));
-      if (snapshot) events.push({ kind: "snapshot", flags: snapshot });
-    }
-    // comments (lines starting with ':'), blank lines, unknown fields: ignore
-  }
-
-  return { state: { buf: remaining, lastEventId }, events };
+  return {
+    feed(chunk: string): ParsedEvent[] {
+      parser.feed(chunk);
+      const out = pending;
+      pending = [];
+      return out;
+    },
+  };
 }
 
 function parseSnapshot(payload: string): Record<string, boolean> | null {
+  if (!payload) return null;
   try {
     const parsed = JSON.parse(payload) as {
       flags?: Array<{ key: string; enabled: boolean }>;

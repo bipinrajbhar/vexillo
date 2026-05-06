@@ -18,11 +18,7 @@
  *  - `Last-Event-ID` is forwarded on every reconnect.
  */
 
-import {
-  feedSse,
-  makeInitialParserState,
-  type ParserState,
-} from "./sse-parser";
+import { createSseParser } from "./sse-parser";
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
@@ -181,7 +177,7 @@ export function createStreamConnection(
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let parserState: ParserState = makeInitialParserState(lastEventId);
+      const parser = createSseParser();
       while (!signal.aborted) {
         let chunk: ReadableStreamReadResult<Uint8Array>;
         try {
@@ -199,12 +195,10 @@ export function createStreamConnection(
           });
           return;
         }
-        const r = feedSse(
-          parserState,
+        const events = parser.feed(
           decoder.decode(chunk.value, { stream: true }),
         );
-        parserState = r.state;
-        for (const evt of r.events) {
+        for (const evt of events) {
           if (signal.aborted) return;
           if (evt.kind === "id") {
             dispatch({ type: "SSE_ID", id: evt.value });
