@@ -1,6 +1,6 @@
 import { LRUCache } from 'lru-cache';
 import type { DbClient } from '@vexillo/db';
-import { queryOrgBySlug, queryUserOrgRole } from '@vexillo/db';
+import { queryOrgBySlug, queryMemberRole } from '@vexillo/db';
 import { NotFoundError, ForbiddenError } from '../services/dashboard-service';
 import type { OrgRow } from '../services/dashboard-service';
 
@@ -20,8 +20,11 @@ export function createOrgContextResolver(opts: {
   max?: number;
 }): OrgContextResolver {
   const { db, ttlMs = 30_000, max = 200 } = opts;
+  // Keyed by `slug:userId` so the auth-middleware lookup is one hash op. The
+  // cached value carries the full org row, so `invalidate(orgId, userId)`
+  // walks the cache to find matching entries — bounded by `max` (default 200)
+  // and called only on membership mutations, so the linear scan is cheap.
   const cache = new LRUCache<string, ResolvedOrgContext>({ max, ttl: ttlMs });
-  const orgIdToSlug = new Map<string, string>();
 
   return {
     async resolve(slug, userId) {
@@ -33,18 +36,21 @@ export function createOrgContextResolver(opts: {
       if (!org) throw new NotFoundError('Organization not found');
       if (org.status === 'suspended') throw new ForbiddenError('Organization suspended');
 
-      const role = await queryUserOrgRole(db, org.id, userId);
+      const role = await queryMemberRole(db, org.id, userId);
       if (!role) throw new ForbiddenError('Not a member of this organization');
 
       const ctx: ResolvedOrgContext = { org, role };
       cache.set(key, ctx);
-      orgIdToSlug.set(org.id, slug);
       return ctx;
     },
 
     invalidate(orgId, userId) {
-      const slug = orgIdToSlug.get(orgId);
-      if (slug) cache.delete(`${slug}:${userId}`);
+      const userSuffix = `:${userId}`;
+      for (const [key, value] of cache.entries()) {
+        if (value.org.id === orgId && key.endsWith(userSuffix)) {
+          cache.delete(key);
+        }
+      }
     },
   };
 }

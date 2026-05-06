@@ -6,7 +6,7 @@ import type { DbClient } from '@vexillo/db';
 
 // ── DB stub ──────────────────────────────────────────────────────────────────
 //
-// queryOrgBySlug and queryUserOrgRole both use:
+// queryOrgBySlug and queryMemberRole both use:
 //   db.select().from(...).where(...).limit(1)
 // Each call to .limit() consumes one item from the queue.
 
@@ -53,7 +53,7 @@ describe('OrgContextResolver', () => {
     const suspended = { ...ORG, status: 'suspended' };
     const { db } = makeDb([
       [suspended], // queryOrgBySlug
-      // queryUserOrgRole should NOT be called
+      // queryMemberRole should NOT be called
       [suspended], // second call
     ]);
     const resolver = createOrgContextResolver({ db });
@@ -64,7 +64,7 @@ describe('OrgContextResolver', () => {
   it('throws ForbiddenError when user is not a member', async () => {
     const { db } = makeDb([
       [ORG],  // queryOrgBySlug
-      [],     // queryUserOrgRole returns no rows
+      [],     // queryMemberRole returns no rows
     ]);
     const resolver = createOrgContextResolver({ db });
     const err = await resolver.resolve('acme', 'u-outsider').catch((e) => e);
@@ -75,7 +75,7 @@ describe('OrgContextResolver', () => {
   it('returns org and role on success', async () => {
     const { db } = makeDb([
       [ORG],            // queryOrgBySlug
-      [{ role: 'admin' }], // queryUserOrgRole
+      [{ role: 'admin' }], // queryMemberRole
     ]);
     const resolver = createOrgContextResolver({ db });
     const ctx = await resolver.resolve('acme', 'u-1');
@@ -86,7 +86,7 @@ describe('OrgContextResolver', () => {
   it('returns cached result on second call without querying the DB again', async () => {
     const { db, limitCallCount } = makeDb([
       [ORG],            // queryOrgBySlug — first resolve
-      [{ role: 'admin' }], // queryUserOrgRole — first resolve
+      [{ role: 'admin' }], // queryMemberRole — first resolve
     ]);
     const resolver = createOrgContextResolver({ db });
 
@@ -100,9 +100,9 @@ describe('OrgContextResolver', () => {
   it('uses separate cache entries for different users', async () => {
     const { db, limitCallCount } = makeDb([
       [ORG],               // queryOrgBySlug for u-1
-      [{ role: 'admin' }], // queryUserOrgRole for u-1
+      [{ role: 'admin' }], // queryMemberRole for u-1
       [ORG],               // queryOrgBySlug for u-2
-      [{ role: 'viewer' }], // queryUserOrgRole for u-2
+      [{ role: 'viewer' }], // queryMemberRole for u-2
     ]);
     const resolver = createOrgContextResolver({ db });
 
@@ -117,9 +117,9 @@ describe('OrgContextResolver', () => {
   it('re-fetches from DB after invalidation', async () => {
     const { db, limitCallCount } = makeDb([
       [ORG],                 // first resolve: queryOrgBySlug
-      [{ role: 'admin' }],   // first resolve: queryUserOrgRole
+      [{ role: 'admin' }],   // first resolve: queryMemberRole
       [ORG],                 // after invalidation: queryOrgBySlug
-      [{ role: 'viewer' }],  // after invalidation: queryUserOrgRole (role changed)
+      [{ role: 'viewer' }],  // after invalidation: queryMemberRole (role changed)
     ]);
     const resolver = createOrgContextResolver({ db });
 
