@@ -1,7 +1,11 @@
 // @vexillo/react-sdk — React bindings
 
 export { createVexilloClient } from "./client";
-export type { VexilloClient, VexilloClientConfig } from "./client";
+export type {
+  VexilloClient,
+  VexilloClientConfig,
+  ConnectionStatus,
+} from "./client";
 
 export { VexilloClientProvider } from "./provider";
 export type { VexilloClientProviderProps } from "./provider";
