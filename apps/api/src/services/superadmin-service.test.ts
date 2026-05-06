@@ -277,6 +277,46 @@ describe('SuperAdminService.updateOrg', () => {
       code: 'NOT_FOUND',
     });
   });
+
+  it('invalidates the OIDC discovery cache for the old issuer when okta config changes', async () => {
+    const db = await createTestDb();
+    const seen: string[] = [];
+    const orgOAuth = { invalidateIssuer: (issuer: string) => seen.push(issuer) };
+    const svc = createSuperAdminService(db, orgOAuth);
+    await seedOrg(db, { name: 'Acme', slug: 'acme' });
+
+    await svc.updateOrg('acme', { oktaIssuer: 'https://new.okta.com' });
+
+    // Old issuer (the value before the update) is what gets evicted.
+    expect(seen).toEqual(['https://example.okta.com']);
+  });
+
+  it.each(['oktaIssuer', 'oktaClientId', 'oktaClientSecret'] as const)(
+    'invalidates the discovery cache when %s is patched',
+    async (field) => {
+      const db = await createTestDb();
+      const seen: string[] = [];
+      const orgOAuth = { invalidateIssuer: (issuer: string) => seen.push(issuer) };
+      const svc = createSuperAdminService(db, orgOAuth);
+      await seedOrg(db, { name: 'Acme', slug: 'acme' });
+
+      await svc.updateOrg('acme', { [field]: 'new-value' });
+
+      expect(seen).toEqual(['https://example.okta.com']);
+    },
+  );
+
+  it('does not invalidate the discovery cache when only the name is patched', async () => {
+    const db = await createTestDb();
+    const seen: string[] = [];
+    const orgOAuth = { invalidateIssuer: (issuer: string) => seen.push(issuer) };
+    const svc = createSuperAdminService(db, orgOAuth);
+    await seedOrg(db, { name: 'Acme', slug: 'acme' });
+
+    await svc.updateOrg('acme', { name: 'Acme Renamed' });
+
+    expect(seen).toEqual([]);
+  });
 });
 
 describe('SuperAdminService.suspendOrg / unsuspendOrg', () => {

@@ -18,6 +18,7 @@ const ALL_REJECT: OrgOAuthService = {
     clearCookies: [],
   }),
   getOrgMeta: async () => ({ kind: 'failure', reason: 'org_not_found' }),
+  invalidateIssuer: () => {},
 };
 
 function stubService(overrides: Partial<OrgOAuthService> = {}): OrgOAuthService {

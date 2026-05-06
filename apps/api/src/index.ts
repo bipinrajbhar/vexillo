@@ -151,7 +151,7 @@ app.route(
 );
 
 // Super-admin routes — isSuperAdmin required
-const superAdminService = createSuperAdminService(db);
+const superAdminService = createSuperAdminService(db, orgOAuthService);
 app.route(
   '/api/superadmin',
   createSuperAdminRouter(superAdminService, (headers) => auth.api.getSession({ headers })),

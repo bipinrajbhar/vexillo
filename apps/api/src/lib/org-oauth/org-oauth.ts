@@ -82,6 +82,21 @@ type OAuthState = {
 const STATE_TTL_SECONDS = 600; // 10 minutes
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 
+// OIDC discovery cache. Issuer endpoints are stable for an issuer URL — they
+// only change when an Okta admin reconfigures the auth server. The TTL absorbs
+// the two-call sign-in flow (authorize + callback within STATE_TTL_SECONDS)
+// while keeping genuine reconfigurations bounded to one hour.
+const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1 hour
+// On a fetch failure, prefer serving a stale-but-recent entry over failing
+// closed mid-sign-in. A 30-second Okta blip otherwise kills every in-flight
+// auth.
+const DISCOVERY_STALE_GRACE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Wall clock — injected so TTL/grace can be advanced explicitly in tests. */
+export interface Clock {
+  now(): number;
+}
+
 export type OrgOAuthDeps = {
   db: DbClient;
   auth: Auth;
@@ -94,7 +109,13 @@ export type OrgOAuthDeps = {
   randomUUID?: () => string;
   randomBytes?: (n: number) => Uint8Array;
   jitProvisioner?: JitProvisioner;
+  clock?: Clock;
 };
+
+interface DiscoveryCacheEntry {
+  discovery: OIDCDiscovery;
+  fetchedAt: number;
+}
 
 export function createOrgOAuth(deps: OrgOAuthDeps): OrgOAuthService {
   const {
@@ -110,6 +131,9 @@ export function createOrgOAuth(deps: OrgOAuthDeps): OrgOAuthService {
   const callbackUrl = `${baseUrl}/api/auth/org-oauth/callback`;
   const superAdminEmails = parseSuperAdminEmails(deps.superAdminEmails);
   const provisioner = deps.jitProvisioner ?? createJitProvisioner({ db });
+  const clock: Clock = deps.clock ?? { now: () => Date.now() };
+
+  const discoveryCache = new Map<string, DiscoveryCacheEntry>();
 
   function clearStateCookie(): CookieSpec {
     return {
@@ -126,11 +150,32 @@ export function createOrgOAuth(deps: OrgOAuthDeps): OrgOAuthService {
   }
 
   async function loadDiscovery(issuer: string): Promise<OIDCDiscovery | null> {
+    const now = clock.now();
+    const cached = discoveryCache.get(issuer);
+
+    if (cached && now - cached.fetchedAt < DISCOVERY_TTL_MS) {
+      return cached.discovery;
+    }
+
     try {
-      return await fetchOIDCDiscovery(issuer, fetchImpl);
+      const fresh = await fetchOIDCDiscovery(issuer, fetchImpl);
+      discoveryCache.set(issuer, { discovery: fresh, fetchedAt: now });
+      return fresh;
     } catch {
+      // Serve stale within the grace window rather than failing closed in the
+      // middle of a sign-in. A discovery doc that worked recently almost
+      // certainly still points at valid Okta endpoints; if it doesn't, the
+      // failure surfaces downstream as token_exchange_failed (a clearer
+      // signal than oidc_discovery_failed for the user mid-flow).
+      if (cached && now - cached.fetchedAt < DISCOVERY_STALE_GRACE_MS) {
+        return cached.discovery;
+      }
       return null;
     }
+  }
+
+  function invalidateIssuer(issuer: string): void {
+    discoveryCache.delete(issuer);
   }
 
   return {
@@ -308,6 +353,8 @@ export function createOrgOAuth(deps: OrgOAuthDeps): OrgOAuthService {
         org: { name: org.name, slug: org.slug, status: org.status },
       };
     },
+
+    invalidateIssuer,
   };
 }
 

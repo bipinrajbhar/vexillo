@@ -455,3 +455,208 @@ describe('getOrgMeta', () => {
     });
   });
 });
+
+// ── OIDC discovery cache ─────────────────────────────────────────────────────
+
+describe('OIDC discovery cache', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const DAY_MS = 24 * HOUR_MS;
+
+  function manualClock(start = 0) {
+    let t = start;
+    return {
+      clock: { now: () => t },
+      advance: (ms: number) => {
+        t += ms;
+      },
+    };
+  }
+
+  function discoveryFetch(opts: { onCall: () => void; failAfter?: number }): typeof fetch {
+    let calls = 0;
+    return (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('openid-configuration')) {
+        calls += 1;
+        opts.onCall();
+        if (opts.failAfter !== undefined && calls > opts.failAfter) {
+          throw new Error('discovery network failure');
+        }
+        return new Response(JSON.stringify(DISCOVERY_PAYLOAD), { status: 200 });
+      }
+      // Token / userinfo are out of scope for these tests.
+      return new Response('not used', { status: 404 });
+    }) as unknown as typeof fetch;
+  }
+
+  it('serves cached discovery on the second beginAuthorize within TTL', async () => {
+    const db = await createTestDb();
+    await seedOrg(db);
+    let calls = 0;
+    const { clock } = manualClock(0);
+    const svc = createOrgOAuth({
+      db,
+      auth: fakeAuth(),
+      baseUrl: BASE_URL,
+      superAdminEmails: '',
+      fetch: discoveryFetch({ onCall: () => (calls += 1) }),
+      clock,
+      ...deterministicRandom(),
+    });
+
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+
+    expect(calls).toBe(1);
+  });
+
+  it('refetches discovery after TTL expires', async () => {
+    const db = await createTestDb();
+    await seedOrg(db);
+    let calls = 0;
+    const { clock, advance } = manualClock(0);
+    const svc = createOrgOAuth({
+      db,
+      auth: fakeAuth(),
+      baseUrl: BASE_URL,
+      superAdminEmails: '',
+      fetch: discoveryFetch({ onCall: () => (calls += 1) }),
+      clock,
+      ...deterministicRandom(),
+    });
+
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    advance(HOUR_MS + 1);
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+
+    expect(calls).toBe(2);
+  });
+
+  it('serves stale discovery within the grace window when the fetch fails', async () => {
+    const db = await createTestDb();
+    await seedOrg(db);
+    let calls = 0;
+    const { clock, advance } = manualClock(0);
+    const svc = createOrgOAuth({
+      db,
+      auth: fakeAuth(),
+      baseUrl: BASE_URL,
+      superAdminEmails: '',
+      // First call seeds the cache; subsequent calls fail.
+      fetch: discoveryFetch({ onCall: () => (calls += 1), failAfter: 1 }),
+      clock,
+      ...deterministicRandom(),
+    });
+
+    // Prime the cache.
+    const first = await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    expect(first.kind).toBe('redirect');
+
+    // Past TTL but within grace, with the network failing — must still redirect.
+    advance(HOUR_MS + 1);
+    const second = await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    expect(second.kind).toBe('redirect');
+    expect(calls).toBe(2); // refetch was attempted once after TTL
+  });
+
+  it('returns oidc_discovery_failed once the stale grace window has passed', async () => {
+    const db = await createTestDb();
+    await seedOrg(db);
+    const { clock, advance } = manualClock(0);
+    const svc = createOrgOAuth({
+      db,
+      auth: fakeAuth(),
+      baseUrl: BASE_URL,
+      superAdminEmails: '',
+      fetch: discoveryFetch({ onCall: () => {}, failAfter: 1 }),
+      clock,
+      ...deterministicRandom(),
+    });
+
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    advance(DAY_MS + 1);
+
+    expect(await svc.beginAuthorize({ orgSlug: 'acme', next: '/' })).toEqual({
+      kind: 'failure',
+      reason: 'oidc_discovery_failed',
+    });
+  });
+
+  it('invalidateIssuer evicts the named issuer; the next call refetches', async () => {
+    const db = await createTestDb();
+    await seedOrg(db);
+    let calls = 0;
+    const { clock } = manualClock(0);
+    const svc = createOrgOAuth({
+      db,
+      auth: fakeAuth(),
+      baseUrl: BASE_URL,
+      superAdminEmails: '',
+      fetch: discoveryFetch({ onCall: () => (calls += 1) }),
+      clock,
+      ...deterministicRandom(),
+    });
+
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    expect(calls).toBe(1);
+
+    svc.invalidateIssuer('https://acme.okta.com');
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+
+    expect(calls).toBe(2);
+  });
+
+  it('invalidateIssuer leaves entries for other issuers in place', async () => {
+    const db = await createTestDb();
+    await seedOrg(db, { slug: 'acme' });
+    const [other] = await db
+      .insert(schema.organizations)
+      .values({
+        name: 'Other',
+        slug: 'other',
+        oktaClientId: 'other-id',
+        oktaClientSecret: await encryptSecret('other-secret'),
+        oktaIssuer: 'https://other.okta.com',
+        status: 'active',
+      })
+      .returning({ id: schema.organizations.id, slug: schema.organizations.slug });
+    void other;
+
+    const callsByIssuer: Record<string, number> = {};
+    const { clock } = manualClock(0);
+    const fetchImpl = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('openid-configuration')) {
+        const issuer = u.replace('/.well-known/openid-configuration', '');
+        callsByIssuer[issuer] = (callsByIssuer[issuer] ?? 0) + 1;
+        return new Response(JSON.stringify(DISCOVERY_PAYLOAD), { status: 200 });
+      }
+      return new Response('', { status: 404 });
+    }) as unknown as typeof fetch;
+    const svc = createOrgOAuth({
+      db,
+      auth: fakeAuth(),
+      baseUrl: BASE_URL,
+      superAdminEmails: '',
+      fetch: fetchImpl,
+      clock,
+      ...deterministicRandom(),
+    });
+
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    await svc.beginAuthorize({ orgSlug: 'other', next: '/' });
+    expect(callsByIssuer).toEqual({
+      'https://acme.okta.com': 1,
+      'https://other.okta.com': 1,
+    });
+
+    svc.invalidateIssuer('https://acme.okta.com');
+    await svc.beginAuthorize({ orgSlug: 'acme', next: '/' });
+    await svc.beginAuthorize({ orgSlug: 'other', next: '/' });
+
+    expect(callsByIssuer).toEqual({
+      'https://acme.okta.com': 2,
+      'https://other.okta.com': 1,
+    });
+  });
+});
