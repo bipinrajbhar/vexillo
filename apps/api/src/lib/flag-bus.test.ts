@@ -114,6 +114,7 @@ describe('createFlagBus', () => {
           order.push('snapshot');
         },
         isStale: () => false,
+        delete: () => {},
       };
       const bus = createFlagBus({ interContainer, fanoutToRegions: noopFanout(), snapshotStore });
 

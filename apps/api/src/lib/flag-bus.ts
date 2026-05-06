@@ -29,6 +29,7 @@ export interface SnapshotStore {
   get(envId: string): string | null;
   set(envId: string, payload: string): void;
   isStale(envId: string): boolean;
+  delete(envId: string): void;
 }
 
 // ── FlagBus interface ─────────────────────────────────────────────────────────
@@ -66,6 +67,14 @@ export interface FlagBus {
    * loading into the bus and remove this method from the public surface.
    */
   cacheSnapshot(envId: string, payload: string): void;
+
+  /**
+   * Drop the cached snapshot for an environment so the next read takes the
+   * cold-miss path. The toggle path uses `publishLocal` (which overwrites the
+   * slot with the fresh payload), so this is for callers that want to force a
+   * re-read without a payload in hand — e.g. a reader-level invalidate.
+   */
+  invalidateSnapshot(envId: string): void;
 
   /**
    * Register an SSE writer for envId. The bus subscribes to the
@@ -124,6 +133,10 @@ export function createFlagBus(deps: {
       snapshotStore.set(envId, payload);
     },
 
+    invalidateSnapshot(envId) {
+      snapshotStore.delete(envId);
+    },
+
     registerListener(envId, send) {
       let set = sends.get(envId);
       if (!set) {
@@ -164,6 +177,9 @@ export function createDefaultSnapshotStore(ttlMs = 30_000, max = 500): SnapshotS
       store.set(envId, payload);
     },
     isStale: (envId) => store.has(envId) && store.getRemainingTTL(envId) === 0,
+    delete: (envId) => {
+      store.delete(envId);
+    },
   };
 }
 
