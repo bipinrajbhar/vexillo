@@ -1,45 +1,31 @@
-import { LRUCache } from 'lru-cache';
-import type { DbClient } from '@vexillo/db';
 import {
   queryUserOrgs,
-  queryOrgFlagsWithStates,
   insertFlag,
   backfillFlagStatesForFlag,
   updateFlag,
   deleteFlag,
   toggleFlag,
   setFlagCountryRules,
-  queryEnvironmentFlagStates,
-  queryOrgEnvironments,
   queryOrgEnvironmentIds,
   insertEnvironmentWithKey,
   updateEnvironmentOrigins,
   deleteEnvironment,
   rotateEnvironmentKey,
-  queryOrgMembers,
   queryMemberRole,
   countOrgAdmins,
   updateMemberRole,
   removeMember,
   restoreMember,
-  queryRemovedOrgMembers,
   queryUserIsSuperAdmin,
-  insertAuditLog,
-  type AuditEntry,
   type FlagWithStates,
   type EnvRef,
   type EnvironmentWithKey,
   type MemberRow,
   organizations,
 } from '@vexillo/db';
+import type { DbClient } from '@vexillo/db';
 import { generateApiKey, hashKey, maskKey } from '../lib/api-key';
-import { createCacheInvalidator } from '../lib/cache-invalidator';
-
-// ── Interfaces ────────────────────────────────────────────────────────────────
-
-export type PublishLocal = (environmentId: string, payload: string) => Promise<void>;
-export type ClearAuthCache = (environmentId: string) => void;
-export type InvalidateMemberContext = (orgId: string, userId: string) => void;
+import type { FlagOps } from './flag-ops';
 
 // Domain errors and helpers live in shared modules so SuperAdminService and
 // DashboardService throw a single error identity. Re-exported here so existing
@@ -54,40 +40,6 @@ import {
 import { slugify } from '../lib/slugify';
 
 export { NotFoundError, ConflictError, PreconditionError, ForbiddenError };
-
-// ── ServiceEffects ─────────────────────────────────────────────────────────────
-
-export interface ServiceEffects {
-  audit(orgId: string, actorId: string, payload: Omit<AuditEntry, 'orgId' | 'actorId'>): Promise<void>;
-  publishFlagChange(orgId: string, environmentId: string): Promise<void>;
-  evictMemberContext(orgId: string, userId: string): void;
-}
-
-const TTL = 30_000;
-const MAX = 200;
-
-export function createServiceEffects(
-  db: DbClient,
-  opts: {
-    publishLocal?: PublishLocal;
-    invalidateMemberContext?: InvalidateMemberContext;
-  } = {},
-): ServiceEffects {
-  const { publishLocal, invalidateMemberContext } = opts;
-  return {
-    async audit(orgId, actorId, payload) {
-      await insertAuditLog(db, { orgId, actorId, ...payload });
-    },
-    async publishFlagChange(orgId, environmentId) {
-      if (!publishLocal) return;
-      const flagStates = await queryEnvironmentFlagStates(db, orgId, environmentId);
-      await publishLocal(environmentId, JSON.stringify({ flags: flagStates }));
-    },
-    evictMemberContext(orgId, userId) {
-      invalidateMemberContext?.(orgId, userId);
-    },
-  };
-}
 
 // ── DashboardService interface ─────────────────────────────────────────────────
 
@@ -145,24 +97,7 @@ export interface DashboardService {
 
 // ── Implementation ─────────────────────────────────────────────────────────────
 
-export function createDashboardService(
-  db: DbClient,
-  effects: ServiceEffects,
-  clearAuthCache?: ClearAuthCache,
-): DashboardService {
-  const flagsCache = new LRUCache<string, { flags: FlagWithStates[]; environments: EnvRef[] }>({ max: MAX, ttl: TTL });
-  const envsCache = new LRUCache<string, EnvironmentWithKey[]>({ max: MAX, ttl: TTL });
-  const membersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
-  const removedMembersCache = new LRUCache<string, MemberRow[]>({ max: MAX, ttl: TTL });
-
-  const invalidator = createCacheInvalidator({
-    flagsCache,
-    envsCache,
-    membersCache,
-    removedMembersCache,
-    clearAuthCache,
-  });
-
+export function createDashboardService(db: DbClient, flagOps: FlagOps): DashboardService {
   return {
     async getMyOrgs(userId) {
       return queryUserOrgs(db, userId);
@@ -171,11 +106,7 @@ export function createDashboardService(
     // ── Flags ────────────────────────────────────────────────────────────────
 
     async getFlagsWithStates(orgId) {
-      const hit = flagsCache.get(orgId);
-      if (hit) return hit;
-      const result = await queryOrgFlagsWithStates(db, orgId);
-      flagsCache.set(orgId, result);
-      return result;
+      return flagOps.read.flagsWithStates(orgId);
     },
 
     async createFlag(orgId, actorId, input) {
@@ -186,14 +117,27 @@ export function createDashboardService(
       const key = input.key?.trim() || slugify(input.name);
       if (!key) throw new PreconditionError('Invalid key');
       try {
-        const flag = await db.transaction(async (tx) => {
-          const created = await insertFlag(tx as unknown as DbClient, orgId, { name: input.name, key, description: input.description, createdByUserId: actorId });
+        return await db.transaction(async (tx) => {
+          const created = await insertFlag(tx as unknown as DbClient, orgId, {
+            name: input.name,
+            key,
+            description: input.description,
+            createdByUserId: actorId,
+          });
           await backfillFlagStatesForFlag(tx as unknown as DbClient, created.id, envIds.map((e) => e.id));
+          await flagOps.commit(
+            {
+              kind: 'flag.created',
+              orgId,
+              actorId,
+              flagId: created.id,
+              flagKey: created.key,
+              name: created.name,
+            },
+            tx as unknown as DbClient,
+          );
           return created;
         });
-        await effects.audit(orgId, actorId, { action: 'flag.create', targetType: 'flag', targetId: flag.id, metadata: { name: flag.name, key: flag.key } });
-        invalidator.onFlagMutation(orgId);
-        return flag;
       } catch (err) {
         if (isUniqueError(err)) throw new ConflictError('Flag key already exists');
         throw err;
@@ -206,24 +150,34 @@ export function createDashboardService(
       }
       const flag = await updateFlag(db, orgId, key, patch);
       if (!flag) throw new NotFoundError('Flag not found');
-      await effects.audit(orgId, actorId, { action: 'flag.update', targetType: 'flag', targetId: flag.id, metadata: { key, changes: patch } });
-      invalidator.onFlagMutation(orgId);
+      await flagOps.commit({
+        kind: 'flag.updated',
+        orgId,
+        actorId,
+        flagId: flag.id,
+        flagKey: key,
+        changes: patch,
+      });
       return flag;
     },
 
     async deleteFlag(orgId, actorId, key) {
       const deleted = await deleteFlag(db, orgId, key);
       if (!deleted) throw new NotFoundError('Flag not found');
-      await effects.audit(orgId, actorId, { action: 'flag.delete', targetType: 'flag', targetId: key, metadata: { key } });
-      invalidator.onFlagMutation(orgId);
+      await flagOps.commit({ kind: 'flag.deleted', orgId, actorId, flagKey: key });
     },
 
     async toggleFlag(orgId, actorId, key, environmentId) {
       const result = await toggleFlag(db, orgId, key, environmentId);
       if (!result) throw new NotFoundError('Flag not found');
-      await effects.audit(orgId, actorId, { action: 'flag.toggle', targetType: 'flag', targetId: key, metadata: { key, environmentId, enabled: result.enabled } });
-      await effects.publishFlagChange(orgId, environmentId);
-      invalidator.onFlagMutation(orgId);
+      await flagOps.commit({
+        kind: 'flag.toggled',
+        orgId,
+        actorId,
+        flagKey: key,
+        environmentId,
+        enabled: result.enabled,
+      });
       return result;
     },
 
@@ -231,20 +185,22 @@ export function createDashboardService(
       const normalized = countries.map((c) => c.toUpperCase());
       const result = await setFlagCountryRules(db, orgId, key, environmentId, normalized);
       if (!result) throw new NotFoundError('Flag not found');
-      await effects.audit(orgId, actorId, { action: 'flag.country-rules.update', targetType: 'flag', targetId: key, metadata: { key, environmentId, before: result.before, after: result.after } });
-      await effects.publishFlagChange(orgId, environmentId);
-      invalidator.onFlagMutation(orgId);
+      await flagOps.commit({
+        kind: 'flag.country_rules',
+        orgId,
+        actorId,
+        flagKey: key,
+        environmentId,
+        before: result.before,
+        after: result.after,
+      });
       return { countries: result.after };
     },
 
     // ── Environments ─────────────────────────────────────────────────────────
 
     async getEnvironments(orgId) {
-      const hit = envsCache.get(orgId);
-      if (hit) return hit;
-      const result = await queryOrgEnvironments(db, orgId);
-      envsCache.set(orgId, result);
-      return result;
+      return flagOps.read.environments(orgId);
     },
 
     async createEnvironment(orgId, actorId, name) {
@@ -255,8 +211,14 @@ export function createDashboardService(
       const keyHint = maskKey(rawKey);
       try {
         const environment = await insertEnvironmentWithKey(db, orgId, { name, slug, keyHash, keyHint });
-        await effects.audit(orgId, actorId, { action: 'environment.create', targetType: 'environment', targetId: environment.id, metadata: { name, slug } });
-        invalidator.onEnvironmentStructuralChange(orgId);
+        await flagOps.commit({
+          kind: 'env.created',
+          orgId,
+          actorId,
+          environmentId: environment.id,
+          name,
+          slug,
+        });
         return { environment, apiKey: rawKey };
       } catch (err) {
         if (isUniqueError(err)) throw new ConflictError('Environment name already exists');
@@ -267,16 +229,20 @@ export function createDashboardService(
     async updateEnvironmentOrigins(orgId, actorId, id, allowedOrigins) {
       const result = await updateEnvironmentOrigins(db, orgId, id, allowedOrigins);
       if (!result) throw new NotFoundError('Environment not found');
-      await effects.audit(orgId, actorId, { action: 'environment.update_origins', targetType: 'environment', targetId: id, metadata: { allowedOrigins } });
-      invalidator.onEnvironmentOriginsUpdate(orgId, id);
+      await flagOps.commit({
+        kind: 'env.origins_updated',
+        orgId,
+        actorId,
+        environmentId: id,
+        allowedOrigins,
+      });
       return result;
     },
 
     async deleteEnvironment(orgId, actorId, id) {
       const deleted = await deleteEnvironment(db, orgId, id);
       if (!deleted) throw new NotFoundError('Environment not found');
-      await effects.audit(orgId, actorId, { action: 'environment.delete', targetType: 'environment', targetId: id });
-      invalidator.onEnvironmentStructuralChange(orgId);
+      await flagOps.commit({ kind: 'env.deleted', orgId, actorId, environmentId: id });
     },
 
     async rotateEnvironmentKey(orgId, actorId, envId) {
@@ -287,27 +253,23 @@ export function createDashboardService(
         const ok = await rotateEnvironmentKey(tx as unknown as DbClient, orgId, envId, { keyHash, keyHint });
         if (!ok) throw new NotFoundError('Environment not found');
       });
-      await effects.audit(orgId, actorId, { action: 'environment.rotate_key', targetType: 'apiKey', targetId: envId });
-      invalidator.onEnvironmentKeyRotation(orgId, envId);
+      await flagOps.commit({
+        kind: 'env.key_rotated',
+        orgId,
+        actorId,
+        environmentId: envId,
+      });
       return { apiKey: rawKey };
     },
 
     // ── Members ──────────────────────────────────────────────────────────────
 
     async getMembers(orgId) {
-      const hit = membersCache.get(orgId);
-      if (hit) return hit;
-      const result = await queryOrgMembers(db, orgId);
-      membersCache.set(orgId, result);
-      return result;
+      return flagOps.read.members(orgId);
     },
 
     async getRemovedMembers(orgId) {
-      const hit = removedMembersCache.get(orgId);
-      if (hit) return hit;
-      const result = await queryRemovedOrgMembers(db, orgId);
-      removedMembersCache.set(orgId, result);
-      return result;
+      return flagOps.read.removedMembers(orgId);
     },
 
     async updateMemberRole(orgId, actorId, userId, role) {
@@ -328,9 +290,13 @@ export function createDashboardService(
       }
       const updated = await updateMemberRole(db, orgId, userId, role);
       if (!updated) throw new NotFoundError('Member not found');
-      await effects.audit(orgId, actorId, { action: 'member.update_role', targetType: 'member', targetId: userId, metadata: { role } });
-      invalidator.onMemberMutation(orgId);
-      effects.evictMemberContext(orgId, userId);
+      await flagOps.commit({
+        kind: 'member.role_updated',
+        orgId,
+        actorId,
+        userId,
+        role,
+      });
       return { userId, role };
     },
 
@@ -347,9 +313,7 @@ export function createDashboardService(
         throw new ConflictError('Cannot remove the last admin');
       }
       await removeMember(db, orgId, userId);
-      await effects.audit(orgId, actorId, { action: 'member.remove', targetType: 'member', targetId: userId });
-      invalidator.onMemberMutation(orgId);
-      effects.evictMemberContext(orgId, userId);
+      await flagOps.commit({ kind: 'member.removed', orgId, actorId, userId });
     },
 
     async restoreMember(orgId, actorId, userId) {
@@ -358,10 +322,7 @@ export function createDashboardService(
       }
       const ok = await restoreMember(db, orgId, userId);
       if (!ok) throw new NotFoundError('Member not found');
-      await effects.audit(orgId, actorId, { action: 'member.restore', targetType: 'member', targetId: userId });
-      invalidator.onMemberMutation(orgId);
-      effects.evictMemberContext(orgId, userId);
+      await flagOps.commit({ kind: 'member.restored', orgId, actorId, userId });
     },
-
   };
 }

@@ -10,7 +10,8 @@ import { createOrgOAuthRouter } from './routes/org-oauth';
 import { createOrgOAuth } from './lib/org-oauth';
 import { createInternalRouter } from './routes/internal';
 import { createAuth } from './lib/auth';
-import { createDashboardService, createServiceEffects } from './services/dashboard-service';
+import { createDashboardService } from './services/dashboard-service';
+import { createFlagOps } from './services/flag-ops';
 import { createSuperAdminService } from './services/superadmin-service';
 import { createRedisClients } from './lib/redis';
 import { createRegionFanout, parseSecondaryUrls } from './lib/region-fanout';
@@ -70,15 +71,19 @@ const orgContextResolver = createOrgContextResolver({ db });
 // path. The route composes them and never sees `allowedOrigins` or raw flag rows.
 const sdkAuthenticator = createSdkAuthenticator({ db });
 
-const serviceEffects = createServiceEffects(db, {
-  publishLocal: (envId, payload) => flagSnapshotWriter.publishLocal(envId, payload),
-  invalidateMemberContext: (orgId, userId) => orgContextResolver.invalidate(orgId, userId),
-});
-const dashboardService = createDashboardService(
+// FlagOps owns post-mutation effect coordination for the dashboard write
+// path: audit-log insert (atomic with caller tx when one is supplied), the
+// re-query-and-publish dance for SDK snapshot updates, the four orgId-keyed
+// list caches, the SDK auth-cache eviction (required, not a silent no-op),
+// and OrgContextResolver invalidation. DashboardService writes to the DB;
+// FlagOps fans out the consequences.
+const flagOps = createFlagOps({
   db,
-  serviceEffects,
-  (environmentId) => sdkAuthenticator.evictByEnvironment(environmentId),
-);
+  flagSnapshots: { writer: flagSnapshotWriter },
+  sdkAuth: sdkAuthenticator,
+  orgContext: orgContextResolver,
+});
+const dashboardService = createDashboardService(db, flagOps);
 
 const app = new Hono();
 
