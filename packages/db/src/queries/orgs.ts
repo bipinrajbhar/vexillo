@@ -29,19 +29,6 @@ export async function queryUserOrgs(
     .where(and(eq(organizationMembers.userId, userId), eq(organizations.status, 'active')));
 }
 
-export async function queryUserOrgRole(
-  db: DbClient,
-  orgId: string,
-  userId: string,
-): Promise<string | null> {
-  const [row] = await db
-    .select({ role: organizationMembers.role })
-    .from(organizationMembers)
-    .where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, userId)))
-    .limit(1);
-  return row?.role ?? null;
-}
-
 // ── Super-admin org operations ───────────────────────────────────────────────
 
 export async function queryAllOrgs(db: DbClient): Promise<OrgListRow[]> {
