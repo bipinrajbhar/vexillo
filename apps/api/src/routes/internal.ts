@@ -1,17 +1,7 @@
 import { Hono } from 'hono';
-import type { SnapshotCache } from '../lib/snapshot-cache';
-import type { StreamRegistry } from '../lib/stream-registry';
+import type { FlagSnapshotWriter } from '../lib/flag-snapshots';
 
-interface RedisPublisher {
-  publish(channel: string, message: string): Promise<number> | void;
-}
-
-export function createInternalRouter(
-  snapshotCache: SnapshotCache,
-  streamRegistry: StreamRegistry,
-  redisPublisher: RedisPublisher | undefined,
-  secret: string,
-) {
+export function createInternalRouter(writer: FlagSnapshotWriter, secret: string) {
   const app = new Hono();
 
   app.post('/flag-change', async (c) => {
@@ -38,12 +28,7 @@ export function createInternalRouter(
 
     const { envId, payload } = body as { envId: string; payload: string };
 
-    snapshotCache.set(envId, payload);
-    if (redisPublisher) {
-      redisPublisher.publish(`flags:env:${envId}`, payload);
-    } else {
-      streamRegistry.broadcast(envId, payload);
-    }
+    writer.ingestRemote(envId, payload);
 
     return c.json({ ok: true });
   });

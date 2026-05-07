@@ -1,469 +1,268 @@
-import { describe, it, expect, beforeAll } from 'bun:test';
+import { describe, it, expect } from 'bun:test';
 import { Hono } from 'hono';
 import { createSuperAdminRouter } from './superadmin';
-import type { GetSession, Session } from './dashboard';
-import { encryptSecret } from '../lib/okta-crypto';
+import type { GetSession, Session } from '../lib/session';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PreconditionError,
+} from '../lib/domain-errors';
+import type { SuperAdminService } from '../services/superadmin-service';
 
-// Fixed test key — 64 hex chars = 32 bytes
-process.env.OKTA_SECRET_KEY = 'a'.repeat(64);
-
-// ── Mock helpers ─────────────────────────────────────────────────────────────
+// The route's only job is auth-guarding super-admins, parsing JSON bodies, and
+// mapping domain errors → HTTP status codes. Domain behavior (slug derivation,
+// encryption, self-protection, etc.) is covered by the boundary tests in
+// `services/superadmin-service.test.ts`. This file uses an in-memory stub
+// service so the assertions stay focused on the HTTP boundary.
 
 const SUPER_SESSION: Session = {
-  user: { id: 'u-super', name: 'Super Admin', email: 'super@example.com', isSuperAdmin: true },
+  user: { id: 'u-super', name: 'Super', email: 'super@x.com', isSuperAdmin: true },
 };
-const NON_SUPER_SESSION: Session = {
-  user: { id: 'u-reg', name: 'Regular User', email: 'user@example.com', isSuperAdmin: false },
+const REGULAR_SESSION: Session = {
+  user: { id: 'u-reg', name: 'Reg', email: 'reg@x.com', isSuperAdmin: false },
 };
 
 const noSession: GetSession = async () => null;
 const superSession: GetSession = async () => SUPER_SESSION;
-const regularSession: GetSession = async () => NON_SUPER_SESSION;
+const regularSession: GetSession = async () => REGULAR_SESSION;
 
-// Chainable mock DB — results consumed FIFO from the queue.
-function makeMockDb(staticResults: unknown[][] = []) {
-  const queue = [...staticResults];
-
-  function consume(): unknown[] {
-    return (queue.shift() ?? []) as unknown[];
-  }
-
-  const chain: Record<string, unknown> = {};
-
-  chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(consume()).then(resolve, reject);
-
-  for (const m of [
-    'select', 'from', 'where', 'leftJoin', 'innerJoin',
-    'insert', 'values', 'update', 'set', 'delete',
-  ]) {
-    chain[m] = () => chain;
-  }
-
-  for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing']) {
-    chain[m] = () => Promise.resolve(consume());
-  }
-
-  return chain as unknown as Parameters<typeof createSuperAdminRouter>[0];
+function stubService(overrides: Partial<SuperAdminService> = {}): SuperAdminService {
+  const notImpl = async (): Promise<never> => {
+    throw new Error('stubService method not implemented for this test');
+  };
+  return {
+    listOrgs: notImpl as unknown as SuperAdminService['listOrgs'],
+    createOrg: notImpl as unknown as SuperAdminService['createOrg'],
+    getOrg: notImpl as unknown as SuperAdminService['getOrg'],
+    updateOrg: notImpl as unknown as SuperAdminService['updateOrg'],
+    suspendOrg: notImpl as unknown as SuperAdminService['suspendOrg'],
+    unsuspendOrg: notImpl as unknown as SuperAdminService['unsuspendOrg'],
+    deleteOrg: notImpl as unknown as SuperAdminService['deleteOrg'],
+    listSuperAdminUsers:
+      notImpl as unknown as SuperAdminService['listSuperAdminUsers'],
+    setSuperAdminStatus:
+      notImpl as unknown as SuperAdminService['setSuperAdminStatus'],
+    ...overrides,
+  };
 }
 
-function makeApp(db: Parameters<typeof createSuperAdminRouter>[0], getSession: GetSession) {
+function makeApp(svc: SuperAdminService, getSession: GetSession) {
   const app = new Hono();
-  app.route('/api/superadmin', createSuperAdminRouter(db, getSession));
+  app.route('/api/superadmin', createSuperAdminRouter(svc, getSession));
   return app;
 }
 
 const BASE = 'http://localhost/api/superadmin';
 
-// Base org with plaintext secret — used in tests that never call decryptSecret.
-const ORG_PLAIN = {
-  id: 'org-1',
-  name: 'Acme',
-  slug: 'acme',
-  status: 'active',
-  oktaClientId: 'okta-id',
-  oktaClientSecret: 'okta-secret',
-  oktaIssuer: 'https://acme.okta.com',
-  createdAt: new Date(),
-};
-
-// ORG with an encrypted secret — used in tests where the route calls decryptSecret
-// (GET detail, PATCH). Populated in beforeAll.
-let ORG: typeof ORG_PLAIN;
-
-beforeAll(async () => {
-  ORG = { ...ORG_PLAIN, oktaClientSecret: await encryptSecret('okta-secret') };
-});
-
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
-describe('superadmin auth middleware', () => {
+describe('auth middleware', () => {
   it('returns 401 when no session', async () => {
-    const app = makeApp(makeMockDb(), noSession);
+    const app = makeApp(stubService(), noSession);
     const res = await app.fetch(new Request(`${BASE}/orgs`));
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'Unauthorized' });
   });
 
-  it('returns 403 for non-super-admin', async () => {
-    const app = makeApp(makeMockDb(), regularSession);
+  it('returns 403 for a non-super-admin session', async () => {
+    const app = makeApp(stubService(), regularSession);
     const res = await app.fetch(new Request(`${BASE}/orgs`));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'Forbidden' });
   });
 
-  it('allows super-admin through', async () => {
-    const app = makeApp(makeMockDb([[ORG_PLAIN]]), superSession);
+  it('lets super-admins through', async () => {
+    const app = makeApp(stubService({ listOrgs: async () => [] }), superSession);
     const res = await app.fetch(new Request(`${BASE}/orgs`));
     expect(res.status).toBe(200);
   });
 });
 
-// ── GET /api/superadmin/orgs ─────────────────────────────────────────────────
+// ── Domain error → HTTP status mapping ───────────────────────────────────────
 
-describe('GET /api/superadmin/orgs', () => {
-  it('returns empty list', async () => {
-    const app = makeApp(makeMockDb([[/* no orgs */]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { orgs: unknown[] };
-    expect(body.orgs).toHaveLength(0);
-  });
-
-  it('returns list of orgs', async () => {
-    const app = makeApp(makeMockDb([[ORG_PLAIN]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { orgs: unknown[] };
-    expect(body.orgs).toHaveLength(1);
-  });
-});
-
-// ── POST /api/superadmin/orgs ────────────────────────────────────────────────
-
-describe('POST /api/superadmin/orgs', () => {
-  it('returns 400 when name is missing', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        slug: 'acme',
-        oktaClientId: 'id',
-        oktaClientSecret: 'secret',
-        oktaIssuer: 'https://acme.okta.com',
+describe('domain error mapping', () => {
+  it('maps NotFoundError → 404', async () => {
+    const app = makeApp(
+      stubService({
+        getOrg: async () => {
+          throw new NotFoundError('Organization not found');
+        },
       }),
-    }));
+      superSession,
+    );
+    const res = await app.fetch(new Request(`${BASE}/orgs/missing`));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'Organization not found' });
+  });
+
+  it('maps ConflictError → 409', async () => {
+    const app = makeApp(
+      stubService({
+        createOrg: async () => {
+          throw new ConflictError('Slug already exists');
+        },
+      }),
+      superSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/orgs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Acme',
+          oktaClientId: 'x',
+          oktaClientSecret: 'y',
+          oktaIssuer: 'z',
+        }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'Slug already exists' });
+  });
+
+  it('maps PreconditionError → 400', async () => {
+    const app = makeApp(
+      stubService({
+        createOrg: async () => {
+          throw new PreconditionError('Name is required');
+        },
+      }),
+      superSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/orgs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Name is required' });
   });
 
-  it('returns 400 when oktaClientId is missing', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Acme',
-        slug: 'acme',
-        oktaClientSecret: 'secret',
-        oktaIssuer: 'https://acme.okta.com',
+  it('maps ForbiddenError → 403', async () => {
+    const app = makeApp(
+      stubService({
+        deleteOrg: async () => {
+          throw new ForbiddenError('Cannot delete your own organization');
+        },
       }),
-    }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'oktaClientId is required' });
-  });
-
-  it('returns 400 when oktaClientSecret is missing', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Acme',
-        slug: 'acme',
-        oktaClientId: 'id',
-        oktaIssuer: 'https://acme.okta.com',
-      }),
-    }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'oktaClientSecret is required' });
-  });
-
-  it('returns 400 when oktaIssuer is missing', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Acme',
-        slug: 'acme',
-        oktaClientId: 'id',
-        oktaClientSecret: 'secret',
-      }),
-    }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'oktaIssuer is required' });
-  });
-
-  it('creates org and returns 201', async () => {
-    const created = { ...ORG_PLAIN, id: 'org-new' };
-    const app = makeApp(makeMockDb([[created]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Acme',
-        slug: 'acme',
-        oktaClientId: 'okta-id',
-        oktaClientSecret: 'okta-secret',
-        oktaIssuer: 'https://acme.okta.com',
-      }),
-    }));
-    expect(res.status).toBe(201);
-    const body = await res.json() as { org: { slug: string } };
-    expect(body.org.slug).toBe('acme');
-  });
-
-  it('auto-derives slug from name', async () => {
-    const created = { ...ORG_PLAIN, name: 'My Company', slug: 'my-company', id: 'org-new' };
-    const app = makeApp(makeMockDb([[created]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'My Company',
-        oktaClientId: 'okta-id',
-        oktaClientSecret: 'okta-secret',
-        oktaIssuer: 'https://myco.okta.com',
-      }),
-    }));
-    expect(res.status).toBe(201);
+      superSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/orgs/acme`, { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'Cannot delete your own organization',
+    });
   });
 });
 
-// ── GET /api/superadmin/orgs/:slug ───────────────────────────────────────────
+// ── Happy-path response shapes ───────────────────────────────────────────────
 
-describe('GET /api/superadmin/orgs/:slug', () => {
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/nonexistent`));
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: 'Organization not found' });
-  });
-
-  it('returns org detail with member count', async () => {
-    // limit(1) pops [ORG]; then() pops [{ memberCount: 3 }]
-    const app = makeApp(makeMockDb([[ORG], [{ memberCount: 3 }]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme`));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { org: { slug: string; memberCount: number } };
-    expect(body.org.slug).toBe('acme');
-    expect(body.org.memberCount).toBe(3);
-  });
-
-  it('returns zero member count when no members', async () => {
-    const app = makeApp(makeMockDb([[ORG], []]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme`));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { org: { memberCount: number } };
-    expect(body.org.memberCount).toBe(0);
-  });
-});
-
-// ── PATCH /api/superadmin/orgs/:slug ────────────────────────────────────────
-
-describe('PATCH /api/superadmin/orgs/:slug', () => {
-  it('returns 400 when no fields provided', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'No fields to update' });
-  });
-
-  it('returns 400 when name is set to empty string', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: '' }),
-    }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'Name cannot be empty' });
-  });
-
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/nonexistent`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'New Name' }),
-    }));
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: 'Organization not found' });
-  });
-
-  it('updates org name and returns 200', async () => {
-    const updated = { ...ORG, name: 'Acme Corp' }; // ORG has encrypted secret
-    const app = makeApp(makeMockDb([[updated]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Acme Corp' }),
-    }));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { org: { name: string } };
-    expect(body.org.name).toBe('Acme Corp');
-  });
-});
-
-// ── POST /api/superadmin/orgs/:slug/suspend ──────────────────────────────────
-
-describe('POST /api/superadmin/orgs/:slug/suspend', () => {
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/nonexistent/suspend`, { method: 'POST' }));
-    expect(res.status).toBe(404);
-  });
-
-  it('suspends org and returns status', async () => {
-    const app = makeApp(makeMockDb([[{ id: 'org-1', status: 'suspended' }]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme/suspend`, { method: 'POST' }));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { status: string };
-    expect(body.status).toBe('suspended');
-  });
-});
-
-// ── POST /api/superadmin/orgs/:slug/unsuspend ────────────────────────────────
-
-describe('POST /api/superadmin/orgs/:slug/unsuspend', () => {
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/nonexistent/unsuspend`, { method: 'POST' }));
-    expect(res.status).toBe(404);
-  });
-
-  it('unsuspends org and returns active status', async () => {
-    const app = makeApp(makeMockDb([[{ id: 'org-1', status: 'active' }]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme/unsuspend`, { method: 'POST' }));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { status: string };
-    expect(body.status).toBe('active');
-  });
-});
-
-// ── DELETE /api/superadmin/orgs/:slug ────────────────────────────────────────
-
-describe('DELETE /api/superadmin/orgs/:slug', () => {
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/nonexistent`, { method: 'DELETE' }));
-    expect(res.status).toBe(404);
-  });
-
-  it('deletes org and returns 204', async () => {
-    const app = makeApp(makeMockDb([[{ id: 'org-1' }]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/orgs/acme`, { method: 'DELETE' }));
-    expect(res.status).toBe(204);
-  });
-});
-
-// ── GET /api/superadmin/users ────────────────────────────────────────────────
-
-describe('GET /api/superadmin/users', () => {
-  it('returns empty list when no super admins', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users`));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { users: unknown[] };
-    expect(body.users).toHaveLength(0);
-  });
-
-  it('returns super admin users', async () => {
-    const users = [
-      { id: 'u-super', name: 'Super Admin', email: 'super@example.com', createdAt: new Date() },
+describe('happy-path shapes', () => {
+  it('GET /orgs returns the service result wrapped in { orgs }', async () => {
+    const orgs = [
+      { id: '1', name: 'Acme', slug: 'acme', status: 'active', createdAt: new Date() },
     ];
-    const app = makeApp(makeMockDb([users]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users`));
+    const app = makeApp(stubService({ listOrgs: async () => orgs }), superSession);
+    const res = await app.fetch(new Request(`${BASE}/orgs`));
     expect(res.status).toBe(200);
-    const body = await res.json() as { users: { id: string }[] };
-    expect(body.users).toHaveLength(1);
-    expect(body.users[0].id).toBe('u-super');
+    expect(((await res.json()) as { orgs: unknown[] }).orgs).toHaveLength(1);
   });
 
-  it('returns 403 for non-super-admin', async () => {
-    const app = makeApp(makeMockDb(), regularSession);
-    const res = await app.fetch(new Request(`${BASE}/users`));
-    expect(res.status).toBe(403);
+  it('POST /orgs threads the session user id as actorId', async () => {
+    let seenActor: string | undefined;
+    const app = makeApp(
+      stubService({
+        createOrg: async (actorId, _input) => {
+          seenActor = actorId;
+          return {
+            id: '1',
+            name: 'Acme',
+            slug: 'acme',
+            status: 'active',
+            oktaClientId: 'x',
+            oktaClientSecret: 'plain',
+            oktaIssuer: 'z',
+            createdAt: new Date(),
+          };
+        },
+      }),
+      superSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/orgs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Acme',
+          oktaClientId: 'x',
+          oktaClientSecret: 'y',
+          oktaIssuer: 'z',
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(seenActor).toBe('u-super');
   });
-});
 
-// ── PATCH /api/superadmin/users/:userId ──────────────────────────────────────
+  it('DELETE /orgs/:slug returns 204 and threads actorId', async () => {
+    let seenActor: string | undefined;
+    let seenSlug: string | undefined;
+    const app = makeApp(
+      stubService({
+        deleteOrg: async (actorId, slug) => {
+          seenActor = actorId;
+          seenSlug = slug;
+        },
+      }),
+      superSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/orgs/acme`, { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(204);
+    expect(seenActor).toBe('u-super');
+    expect(seenSlug).toBe('acme');
+  });
 
-describe('PATCH /api/superadmin/users/:userId', () => {
-  it('returns 400 when isSuperAdmin is missing from body', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-other`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    }));
+  it('PATCH /users/:userId rejects non-boolean isSuperAdmin with 400', async () => {
+    const app = makeApp(stubService(), superSession);
+    const res = await app.fetch(
+      new Request(`${BASE}/users/u-1`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isSuperAdmin: 'yes' }),
+      }),
+    );
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'isSuperAdmin must be a boolean' });
+    expect(await res.json()).toEqual({
+      error: 'isSuperAdmin must be a boolean',
+    });
   });
 
-  it('returns 400 when caller attempts to demote themselves', async () => {
-    const app = makeApp(makeMockDb(), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-super`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isSuperAdmin: false }),
-    }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'Cannot demote yourself' });
-  });
-
-  it('returns 404 when user not found', async () => {
-    const app = makeApp(makeMockDb([[]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-ghost`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isSuperAdmin: true }),
-    }));
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: 'User not found' });
-  });
-
-  it('promotes another user and returns user data', async () => {
-    const promoted = { id: 'u-other', email: 'other@example.com', isSuperAdmin: true };
-    const app = makeApp(makeMockDb([[promoted]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-other`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isSuperAdmin: true }),
-    }));
+  it('PATCH /users/:userId threads actor + target ids', async () => {
+    let seen: { actor?: string; userId?: string; isSuperAdmin?: boolean } = {};
+    const app = makeApp(
+      stubService({
+        setSuperAdminStatus: async (actorId, userId, isSuperAdmin) => {
+          seen = { actor: actorId, userId, isSuperAdmin };
+          return { id: userId, email: 't@x.com', isSuperAdmin };
+        },
+      }),
+      superSession,
+    );
+    const res = await app.fetch(
+      new Request(`${BASE}/users/u-target`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isSuperAdmin: true }),
+      }),
+    );
     expect(res.status).toBe(200);
-    const body = await res.json() as { user: typeof promoted };
-    expect(body.user.id).toBe('u-other');
-    expect(body.user.isSuperAdmin).toBe(true);
-  });
-
-  it('demotes another user (not self)', async () => {
-    const demoted = { id: 'u-other', email: 'other@example.com', isSuperAdmin: false };
-    const app = makeApp(makeMockDb([[demoted]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-other`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isSuperAdmin: false }),
-    }));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { user: typeof demoted };
-    expect(body.user.isSuperAdmin).toBe(false);
-  });
-
-  it('allows caller to promote themselves', async () => {
-    const promoted = { id: 'u-super', email: 'super@example.com', isSuperAdmin: true };
-    const app = makeApp(makeMockDb([[promoted]]), superSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-super`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isSuperAdmin: true }),
-    }));
-    expect(res.status).toBe(200);
-  });
-
-  it('returns 403 for non-super-admin', async () => {
-    const app = makeApp(makeMockDb(), regularSession);
-    const res = await app.fetch(new Request(`${BASE}/users/u-other`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isSuperAdmin: true }),
-    }));
-    expect(res.status).toBe(403);
+    expect(seen).toEqual({ actor: 'u-super', userId: 'u-target', isSuperAdmin: true });
   });
 });

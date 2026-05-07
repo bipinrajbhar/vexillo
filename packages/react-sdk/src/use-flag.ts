@@ -6,16 +6,18 @@ import { useVexilloClientContext } from "./provider";
  *
  * - `value` — current boolean value. Falls back to `fallbacks` config then
  *   `false` for unknown keys or while the client is still loading.
- * - `isLoading` — `true` until the client has loaded at least once. Use this
- *   to suppress flag-gated UI until flags are known, avoiding
- *   flash-of-wrong-content in SPAs:
+ * - `isLoading` — `true` only while the client's `status` is `"loading"`
+ *   (cold start with no `initialFlags`). It flips to `false` once flags
+ *   arrive, AND on cold-start failure (the consumer should branch on
+ *   `client.status === "error"` for that case rather than spinning forever).
+ *
  *   ```tsx
  *   const [newCheckout, isLoading] = useFlag("new-checkout");
  *   if (isLoading) return null;
  *   return newCheckout ? <NewCheckout /> : <OldCheckout />;
  *   ```
  *
- * Re-renders only when this specific key's value changes.
+ * Re-renders on this key's value changes and on status transitions.
  *
  * @throws if called outside a `<VexilloClientProvider>`.
  */
@@ -24,21 +26,23 @@ export function useFlag(key: string): [value: boolean, isLoading: boolean] {
 
   const [state, setState] = useState(() => ({
     value: client.getFlag(key),
-    isLoading: !client.isReady,
+    isLoading: client.status === "loading",
   }));
 
   useEffect(() => {
-    setState({
-      value: client.getFlag(key),
-      isLoading: !client.isReady,
-    });
-
-    return client.subscribe(key, () => {
+    const sync = () => {
       setState({
         value: client.getFlag(key),
-        isLoading: !client.isReady,
+        isLoading: client.status === "loading",
       });
-    });
+    };
+    sync();
+    const unsubKey = client.subscribe(key, sync);
+    const unsubStatus = client.subscribeStatus(sync);
+    return () => {
+      unsubKey();
+      unsubStatus();
+    };
   }, [client, key]);
 
   return [state.value, state.isLoading];

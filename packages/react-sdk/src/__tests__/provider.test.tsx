@@ -126,7 +126,6 @@ describe("VexilloClientProvider — fetch path", () => {
   });
 
   it("falls back to fallbacks on HTTP error", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(globalThis, "fetch").mockImplementation(makeFetchHttpError(401));
 
     const client = createVexilloClient({
@@ -149,7 +148,6 @@ describe("VexilloClientProvider — fetch path", () => {
   });
 
   it("falls back to fallbacks on network error", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(globalThis, "fetch").mockImplementation(makeFetchNetworkError());
 
     const client = createVexilloClient({
@@ -219,166 +217,22 @@ describe("VexilloClientProvider — overrides", () => {
   });
 });
 
-describe("VexilloClientProvider — focus refetch (REST mode)", () => {
-  it("re-fetches flags when window regains focus in REST mode", async () => {
-    const mockFetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(makeFetchOk([{ key: "feature", enabled: true }]));
-
-    const client = createVexilloClient({ baseUrl: BASE_URL, apiKey: API_KEY });
-
-    await act(async () => {
-      render(
-        <VexilloClientProvider client={client}>
-          <FlagConsumer flagKey="feature" />
-        </VexilloClientProvider>,
-      );
-    });
-
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
-  });
-
-  it("does not call client.load() on window focus when streaming=true", async () => {
-    const disconnect = vi.fn();
-    const client = createVexilloClient({ baseUrl: BASE_URL, apiKey: API_KEY });
-    vi.spyOn(client, "connectStream").mockReturnValue(disconnect);
-    const loadSpy = vi.spyOn(client, "load").mockResolvedValue(undefined);
-
-    render(
-      <VexilloClientProvider client={client} streaming>
-        <span />
-      </VexilloClientProvider>,
-    );
-
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    expect(loadSpy).not.toHaveBeenCalled();
-  });
-
-  it("updates flag values silently after a focus-triggered refetch without an intermediate loading state", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(makeFetchOk([{ key: "feature", enabled: false }]))
-      .mockImplementationOnce(makeFetchOk([{ key: "feature", enabled: true }]));
-
-    function LoadingAwareFlagConsumer({ flagKey }: { flagKey: string }) {
-      const [value, isLoading] = useFlag(flagKey);
-      return (
-        <>
-          <span data-testid={`flag-${flagKey}`}>{String(value)}</span>
-          <span data-testid="loading">{String(isLoading)}</span>
-        </>
-      );
-    }
-
-    const client = createVexilloClient({ baseUrl: BASE_URL, apiKey: API_KEY });
-
-    await act(async () => {
-      render(
-        <VexilloClientProvider client={client}>
-          <LoadingAwareFlagConsumer flagKey="feature" />
-        </VexilloClientProvider>,
-      );
-    });
-
-    await waitFor(() =>
-      expect(screen.getByTestId("flag-feature").textContent).toBe("false"),
-    );
-    expect(screen.getByTestId("loading").textContent).toBe("false");
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    await waitFor(() =>
-      expect(screen.getByTestId("flag-feature").textContent).toBe("true"),
-    );
-    // isLoading must remain false throughout the silent refetch
-    expect(screen.getByTestId("loading").textContent).toBe("false");
-  });
-
-  it("applies focus refetch even when initialFlags were provided (SSR hydration case)", async () => {
-    const client = createMockVexilloClient({ flags: { feature: false } });
-    const loadSpy = vi.spyOn(client, "load").mockResolvedValue(undefined);
-
-    render(
-      <VexilloClientProvider client={client}>
-        <FlagConsumer flagKey="feature" />
-      </VexilloClientProvider>,
-    );
-
-    // isReady=true so mount did not call load()
-    expect(loadSpy).not.toHaveBeenCalled();
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    expect(loadSpy).toHaveBeenCalledOnce();
-  });
-});
-
-describe("VexilloClientProvider — streaming prop", () => {
-  it("calls load() when streaming is absent, does not call connectStream()", () => {
+describe("VexilloClientProvider — lifecycle", () => {
+  it("calls client.start() on mount and the returned stop on unmount", () => {
+    const stop = vi.fn();
+    const start = vi.fn(() => stop);
     const client = createMockVexilloClient({ flags: {} });
-    // Make isReady false so load() is triggered
-    const loadSpy = vi.spyOn(client, "load").mockResolvedValue(undefined);
-    const connectStreamSpy = vi.spyOn(client, "connectStream");
-    // Simulate a non-ready client by resetting ready state via load
-    // Use a real client that hasn't loaded yet
-    const freshClient = createVexilloClient({ baseUrl: BASE_URL, apiKey: API_KEY });
-    const freshLoad = vi.spyOn(freshClient, "load").mockResolvedValue(undefined);
-    const freshConnectStream = vi.spyOn(freshClient, "connectStream");
-
-    render(
-      <VexilloClientProvider client={freshClient}>
-        <span />
-      </VexilloClientProvider>,
-    );
-
-    expect(freshLoad).toHaveBeenCalledOnce();
-    expect(freshConnectStream).not.toHaveBeenCalled();
-
-    void loadSpy;
-    void connectStreamSpy;
-  });
-
-  it("calls connectStream() when streaming=true, does not call load()", () => {
-    const disconnect = vi.fn();
-    const client = createMockVexilloClient({ flags: { feat: true } });
-    const connectStreamSpy = vi.spyOn(client, "connectStream").mockReturnValue(disconnect);
-    const loadSpy = vi.spyOn(client, "load");
-
-    render(
-      <VexilloClientProvider client={client} streaming>
-        <span />
-      </VexilloClientProvider>,
-    );
-
-    expect(connectStreamSpy).toHaveBeenCalledOnce();
-    expect(loadSpy).not.toHaveBeenCalled();
-  });
-
-  it("calls the disconnect function on unmount when streaming=true", () => {
-    const disconnect = vi.fn();
-    const client = createMockVexilloClient({ flags: {} });
-    vi.spyOn(client, "connectStream").mockReturnValue(disconnect);
+    client.start = start;
 
     const { unmount } = render(
-      <VexilloClientProvider client={client} streaming>
+      <VexilloClientProvider client={client}>
         <span />
       </VexilloClientProvider>,
     );
 
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
     unmount();
-    expect(disconnect).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
   });
 });

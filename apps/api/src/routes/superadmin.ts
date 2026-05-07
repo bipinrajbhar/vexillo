@@ -1,23 +1,22 @@
 import { Hono } from 'hono';
-import { eq, desc, count, and, isNull } from 'drizzle-orm';
-import { organizations, organizationMembers, authUser } from '@vexillo/db';
-import type { DbClient } from '@vexillo/db';
+import type { Context } from 'hono';
 import type { GetSession, Session } from '../lib/session';
-import { encryptSecret, decryptSecret } from '../lib/okta-crypto';
+import type { SuperAdminService } from '../services/superadmin-service';
+import { handleServiceError } from '../lib/domain-errors';
 
 type Variables = {
   session: Session;
 };
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+// Routes funnel domain errors through this — known codes map to HTTP status,
+// anything else propagates to Hono's default error handler.
+function handleOrThrow(c: Context, err: unknown): Response {
+  const mapped = handleServiceError(err, c);
+  if (mapped) return mapped;
+  throw err;
 }
 
-export function createSuperAdminRouter(db: DbClient, getSession: GetSession) {
+export function createSuperAdminRouter(service: SuperAdminService, getSession: GetSession) {
   const router = new Hono<{ Variables: Variables }>();
 
   // Auth + super-admin guard — all routes require isSuperAdmin = true
@@ -31,204 +30,101 @@ export function createSuperAdminRouter(db: DbClient, getSession: GetSession) {
 
   // ── Organizations ────────────────────────────────────────────────────────────
 
-  // GET /api/superadmin/orgs — list all organizations
   router.get('/orgs', async (c) => {
-    const orgs = await db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        status: organizations.status,
-        createdAt: organizations.createdAt,
-      })
-      .from(organizations)
-      .orderBy(desc(organizations.createdAt));
+    const orgs = await service.listOrgs();
     return c.json({ orgs });
   });
 
-  // POST /api/superadmin/orgs — create organization
   router.post('/orgs', async (c) => {
-    const body = await c.req.json();
-    const name: string = body.name?.trim() ?? '';
-    const slug: string = body.slug?.trim() || slugify(name);
-    const oktaClientId: string = body.oktaClientId?.trim() ?? '';
-    const oktaClientSecret: string = body.oktaClientSecret?.trim() ?? '';
-    const oktaIssuer: string = body.oktaIssuer?.trim() ?? '';
-
-    if (!name) return c.json({ error: 'Name is required' }, 400);
-    if (!slug) return c.json({ error: 'Slug is required' }, 400);
-    if (!oktaClientId) return c.json({ error: 'oktaClientId is required' }, 400);
-    if (!oktaClientSecret) return c.json({ error: 'oktaClientSecret is required' }, 400);
-    if (!oktaIssuer) return c.json({ error: 'oktaIssuer is required' }, 400);
-
-    try {
-      const [org] = await db
-        .insert(organizations)
-        .values({ name, slug, oktaClientId, oktaClientSecret: await encryptSecret(oktaClientSecret), oktaIssuer })
-        .returning();
-      return c.json({ org: { ...org, oktaClientSecret } }, 201);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('unique') || msg.includes('duplicate')) {
-        return c.json({ error: 'Slug already exists' }, 409);
-      }
-      throw err;
-    }
-  });
-
-  // GET /api/superadmin/orgs/:slug — get org detail with member count
-  router.get('/orgs/:slug', async (c) => {
-    const slug = c.req.param('slug');
-    const [org] = await db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
-    if (!org) return c.json({ error: 'Organization not found' }, 404);
-
-    const [countRow] = await db
-      .select({ memberCount: count() })
-      .from(organizationMembers)
-      .where(eq(organizationMembers.orgId, org.id));
-
-    return c.json({
-      org: {
-        ...org,
-        oktaClientSecret: await decryptSecret(org.oktaClientSecret),
-        memberCount: countRow?.memberCount ?? 0,
-      },
-    });
-  });
-
-  // PATCH /api/superadmin/orgs/:slug — update org name or Okta config (slug is immutable)
-  router.patch('/orgs/:slug', async (c) => {
-    const slug = c.req.param('slug');
-    const body = await c.req.json();
-
-    const updates: Partial<typeof organizations.$inferInsert> = {};
-    if (body.name !== undefined) updates.name = body.name.trim();
-    if (body.oktaClientId !== undefined) updates.oktaClientId = body.oktaClientId.trim();
-    if (body.oktaClientSecret !== undefined) updates.oktaClientSecret = await encryptSecret(body.oktaClientSecret.trim());
-    if (body.oktaIssuer !== undefined) updates.oktaIssuer = body.oktaIssuer.trim();
-
-    if (updates.name === '') return c.json({ error: 'Name cannot be empty' }, 400);
-    if (Object.keys(updates).length === 0) return c.json({ error: 'No fields to update' }, 400);
-
-    try {
-      const result = await db
-        .update(organizations)
-        .set(updates)
-        .where(eq(organizations.slug, slug))
-        .returning();
-      if (result.length === 0) return c.json({ error: 'Organization not found' }, 404);
-      const org = result[0];
-      return c.json({ org: { ...org, oktaClientSecret: await decryptSecret(org.oktaClientSecret) } });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('unique') || msg.includes('duplicate')) {
-        return c.json({ error: 'Slug already exists' }, 409);
-      }
-      throw err;
-    }
-  });
-
-  // POST /api/superadmin/orgs/:slug/suspend — set status to 'suspended'
-  router.post('/orgs/:slug/suspend', async (c) => {
-    const slug = c.req.param('slug');
-    const result = await db
-      .update(organizations)
-      .set({ status: 'suspended' })
-      .where(eq(organizations.slug, slug))
-      .returning({ id: organizations.id, status: organizations.status });
-    if (result.length === 0) return c.json({ error: 'Organization not found' }, 404);
-    return c.json({ status: result[0].status });
-  });
-
-  // POST /api/superadmin/orgs/:slug/unsuspend — set status to 'active'
-  router.post('/orgs/:slug/unsuspend', async (c) => {
-    const slug = c.req.param('slug');
-    const result = await db
-      .update(organizations)
-      .set({ status: 'active' })
-      .where(eq(organizations.slug, slug))
-      .returning({ id: organizations.id, status: organizations.status });
-    if (result.length === 0) return c.json({ error: 'Organization not found' }, 404);
-    return c.json({ status: result[0].status });
-  });
-
-  // DELETE /api/superadmin/orgs/:slug — permanently delete org (cascades to all data)
-  router.delete('/orgs/:slug', async (c) => {
-    const slug = c.req.param('slug');
     const session = c.get('session');
+    const body = await c.req.json();
+    try {
+      const org = await service.createOrg(session.user.id, {
+        name: body.name ?? '',
+        slug: body.slug,
+        oktaClientId: body.oktaClientId ?? '',
+        oktaClientSecret: body.oktaClientSecret ?? '',
+        oktaIssuer: body.oktaIssuer ?? '',
+      });
+      return c.json({ org }, 201);
+    } catch (err) {
+      return handleOrThrow(c, err);
+    }
+  });
 
-    const org = await db
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .then((rows) => rows[0]);
-    if (!org) return c.json({ error: 'Organization not found' }, 404);
+  router.get('/orgs/:slug', async (c) => {
+    try {
+      const org = await service.getOrg(c.req.param('slug'));
+      return c.json({ org });
+    } catch (err) {
+      return handleOrThrow(c, err);
+    }
+  });
 
-    const ownMembership = await db
-      .select({ orgId: organizationMembers.orgId })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.orgId, org.id),
-          eq(organizationMembers.userId, session.user.id),
-          isNull(organizationMembers.removedAt),
-        ),
-      )
-      .then((rows) => rows[0]);
-    if (ownMembership) return c.json({ error: 'Cannot delete your own organization' }, 403);
+  router.patch('/orgs/:slug', async (c) => {
+    const body = await c.req.json();
+    try {
+      const org = await service.updateOrg(c.req.param('slug'), {
+        name: body.name,
+        oktaClientId: body.oktaClientId,
+        oktaClientSecret: body.oktaClientSecret,
+        oktaIssuer: body.oktaIssuer,
+      });
+      return c.json({ org });
+    } catch (err) {
+      return handleOrThrow(c, err);
+    }
+  });
 
-    await db.delete(organizations).where(eq(organizations.id, org.id));
-    return c.body(null, 204);
+  router.post('/orgs/:slug/suspend', async (c) => {
+    try {
+      const result = await service.suspendOrg(c.req.param('slug'));
+      return c.json(result);
+    } catch (err) {
+      return handleOrThrow(c, err);
+    }
+  });
+
+  router.post('/orgs/:slug/unsuspend', async (c) => {
+    try {
+      const result = await service.unsuspendOrg(c.req.param('slug'));
+      return c.json(result);
+    } catch (err) {
+      return handleOrThrow(c, err);
+    }
+  });
+
+  router.delete('/orgs/:slug', async (c) => {
+    try {
+      await service.deleteOrg(c.get('session').user.id, c.req.param('slug'));
+      return c.body(null, 204);
+    } catch (err) {
+      return handleOrThrow(c, err);
+    }
   });
 
   // ── Users ────────────────────────────────────────────────────────────────────
 
-  // GET /api/superadmin/users — list all super admin users
   router.get('/users', async (c) => {
-    const users = await db
-      .select({
-        id: authUser.id,
-        name: authUser.name,
-        email: authUser.email,
-        createdAt: authUser.createdAt,
-      })
-      .from(authUser)
-      .where(eq(authUser.isSuperAdmin, true))
-      .orderBy(authUser.email);
+    const users = await service.listSuperAdminUsers();
     return c.json({ users });
   });
 
-  // PATCH /api/superadmin/users/:userId — promote or demote a user's super admin status
   router.patch('/users/:userId', async (c) => {
-    const session = c.get('session');
-    const userId = c.req.param('userId');
     const body = await c.req.json();
-
     if (typeof body.isSuperAdmin !== 'boolean') {
       return c.json({ error: 'isSuperAdmin must be a boolean' }, 400);
     }
-
-    // Prevent self-demotion
-    if (userId === session.user.id && !body.isSuperAdmin) {
-      return c.json({ error: 'Cannot demote yourself' }, 400);
+    try {
+      const user = await service.setSuperAdminStatus(
+        c.get('session').user.id,
+        c.req.param('userId'),
+        body.isSuperAdmin,
+      );
+      return c.json({ user });
+    } catch (err) {
+      return handleOrThrow(c, err);
     }
-
-    const result = await db
-      .update(authUser)
-      .set({ isSuperAdmin: body.isSuperAdmin })
-      .where(eq(authUser.id, userId))
-      .returning({
-        id: authUser.id,
-        email: authUser.email,
-        isSuperAdmin: authUser.isSuperAdmin,
-      });
-
-    if (result.length === 0) return c.json({ error: 'User not found' }, 404);
-    return c.json({ user: result[0] });
   });
 
   return router;

@@ -11,6 +11,43 @@ export async function queryUserIsSuperAdmin(db: DbClient, userId: string): Promi
   return row?.isSuperAdmin ?? false;
 }
 
+export type SuperAdminUserRow = {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: Date;
+};
+
+export async function querySuperAdminUsers(db: DbClient): Promise<SuperAdminUserRow[]> {
+  return db
+    .select({
+      id: authUser.id,
+      name: authUser.name,
+      email: authUser.email,
+      createdAt: authUser.createdAt,
+    })
+    .from(authUser)
+    .where(eq(authUser.isSuperAdmin, true))
+    .orderBy(asc(authUser.email));
+}
+
+export async function setUserSuperAdmin(
+  db: DbClient,
+  userId: string,
+  isSuperAdmin: boolean,
+): Promise<{ id: string; email: string; isSuperAdmin: boolean } | null> {
+  const [row] = await db
+    .update(authUser)
+    .set({ isSuperAdmin })
+    .where(eq(authUser.id, userId))
+    .returning({
+      id: authUser.id,
+      email: authUser.email,
+      isSuperAdmin: authUser.isSuperAdmin,
+    });
+  return row ?? null;
+}
+
 export type MemberRow = {
   id: string;
   name: string;
@@ -55,6 +92,46 @@ export async function queryMemberRole(
     .where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, userId), isNull(organizationMembers.removedAt)))
     .limit(1);
   return row?.role ?? null;
+}
+
+/** Returns the membership row regardless of `removedAt`, so callers (JIT
+ *  provisioning) can distinguish "never a member" from "was a member, was
+ *  revoked." `queryMemberRole` filters removed members out — this one doesn't. */
+export async function queryOrgMembership(
+  db: DbClient,
+  orgId: string,
+  userId: string,
+): Promise<{ role: string; removedAt: Date | null } | null> {
+  const [row] = await db
+    .select({ role: organizationMembers.role, removedAt: organizationMembers.removedAt })
+    .from(organizationMembers)
+    .where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, userId)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function insertOrgMember(
+  db: DbClient,
+  args: { orgId: string; userId: string; role: 'admin' | 'viewer' },
+): Promise<void> {
+  await db.insert(organizationMembers).values(args);
+}
+
+/**
+ * Insert-or-overwrite a membership: super-admins get reinstated to admin even
+ * if they had been removed. Idempotent on repeated sign-ins.
+ */
+export async function upsertOrgMember(
+  db: DbClient,
+  args: { orgId: string; userId: string; role: 'admin' | 'viewer' },
+): Promise<void> {
+  await db
+    .insert(organizationMembers)
+    .values(args)
+    .onConflictDoUpdate({
+      target: [organizationMembers.orgId, organizationMembers.userId],
+      set: { role: args.role, removedAt: null },
+    });
 }
 
 export async function updateMemberRole(
