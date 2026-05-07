@@ -10,6 +10,17 @@ import type { Environment, Flag } from './types'
 type FlagsPayload = { flags: FlagRow[]; environments: EnvRef[] }
 type FlagsView = { flags: readonly Flag[]; environments: readonly Environment[] }
 
+// Module-level so the reference is stable across renders.
+// TanStack Query memoizes `select` by function identity — an inline arrow
+// re-runs select every render, which thrashes useReactTable's row-model
+// memo and triggers _autoResetPageIndex → setState → re-render loops.
+function selectFlagsView(data: FlagsPayload): FlagsView {
+  return {
+    flags: data.flags.map(toFlag),
+    environments: data.environments.map(toEnvironment),
+  }
+}
+
 export interface UseFlagsResult {
   flags: readonly Flag[]
   environments: readonly Environment[]
@@ -30,10 +41,7 @@ export function useFlags(orgSlug: string): UseFlagsResult {
   const query = useQuery<FlagsPayload, Error, FlagsView>({
     queryKey: key,
     queryFn: () => api.flags.list(orgSlug),
-    select: (data) => ({
-      flags: data.flags.map(toFlag),
-      environments: data.environments.map(toEnvironment),
-    }),
+    select: selectFlagsView,
   })
 
   const invalidate = useCallback(() => {
