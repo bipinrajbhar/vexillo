@@ -6,34 +6,24 @@ import React, {
   type ReactNode,
 } from "react";
 import { type VexilloClient } from "./client";
-import { useFocusRefetch } from "./use-focus-refetch";
 
 const VexilloClientContext = createContext<VexilloClient | null>(null);
 
 export interface VexilloClientProviderProps {
   client: VexilloClient;
   children: ReactNode;
-  /**
-   * When true, opens a persistent SSE stream via `client.connectStream()`
-   * instead of calling `client.load()`. The stream reconnects automatically
-   * with exponential backoff on disconnect.
-   *
-   * When false (the default), flags are fetched once on mount via `client.load()`
-   * and silently re-fetched whenever the browser window regains focus, so that
-   * users returning to the tab after navigating away always see fresh values.
-   */
-  streaming?: boolean;
 }
 
 /**
- * Provides a VexilloClient to the React tree. Calls `client.load()` on mount
- * if the client is not already ready (i.e. no `initialFlags` were provided).
- * Pass `streaming` to use SSE for real-time flag updates instead.
+ * Provides a VexilloClient to the React tree and drives its lifecycle.
+ * Calls `client.start()` on mount and the returned stop on unmount. Wire mode
+ * (REST vs streaming) and auto-refresh policy live on the client config — the
+ * Provider is mode-agnostic.
  *
  * ```tsx
- * const client = createVexilloClient({ baseUrl: "...", apiKey: "..." });
+ * const client = createVexilloClient({ baseUrl: "...", apiKey: "...", mode: "stream" });
  *
- * <VexilloClientProvider client={client} streaming>
+ * <VexilloClientProvider client={client}>
  *   <App />
  * </VexilloClientProvider>
  * ```
@@ -41,25 +31,17 @@ export interface VexilloClientProviderProps {
 export function VexilloClientProvider({
   client,
   children,
-  streaming = false,
 }: VexilloClientProviderProps): React.ReactElement {
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
 
-  useFocusRefetch(streaming ? () => {} : () => { void client.load(); });
-
   useEffect(() => {
     const unsub = client.subscribeAll(() => forceUpdate());
-    let disconnect: (() => void) | undefined;
-    if (streaming) {
-      disconnect = client.connectStream();
-    } else if (!client.isReady) {
-      client.load();
-    }
+    const stop = client.start();
     return () => {
       unsub();
-      disconnect?.();
+      stop();
     };
-  }, [client, streaming]);
+  }, [client]);
 
   return (
     <VexilloClientContext.Provider value={client}>

@@ -4,6 +4,8 @@ import { createDashboardRouter } from './dashboard';
 import type { GetSession, Session } from './dashboard';
 import type { DashboardService, OrgRow } from '../services/dashboard-service';
 import { NotFoundError, ConflictError, PreconditionError, ForbiddenError, createDashboardService } from '../services/dashboard-service';
+import type { FlagOps, DomainEvent } from '../services/flag-ops';
+import type { OrgContextResolver } from '../lib/org-context-resolver';
 import type { DbClient } from '@vexillo/db';
 
 // ── Session fixtures ─────────────────────────────────────────────────────────
@@ -43,7 +45,6 @@ function makeMockService(overrides: Partial<DashboardService> = {}): DashboardSe
   };
 
   return {
-    resolveOrgContext: notImplemented('resolveOrgContext') as DashboardService['resolveOrgContext'],
     getMyOrgs: notImplemented('getMyOrgs') as DashboardService['getMyOrgs'],
     getFlagsWithStates: notImplemented('getFlagsWithStates') as DashboardService['getFlagsWithStates'],
     createFlag: notImplemented('createFlag') as DashboardService['createFlag'],
@@ -65,25 +66,67 @@ function makeMockService(overrides: Partial<DashboardService> = {}): DashboardSe
   };
 }
 
-// Convenience: an adminCtx-resolving service (most tests need this to pass the org middleware).
-function adminService(overrides: Partial<DashboardService> = {}): DashboardService {
-  return makeMockService({
-    resolveOrgContext: async () => ({ org: ORG, role: 'admin' }),
+// ── Mock resolver factory ────────────────────────────────────────────────────
+
+function adminResolver(overrides: Partial<OrgContextResolver> = {}): OrgContextResolver {
+  return {
+    resolve: async () => ({ org: ORG, role: 'admin' }),
+    invalidate: () => {},
     ...overrides,
-  });
+  };
+}
+
+function viewerResolver(overrides: Partial<OrgContextResolver> = {}): OrgContextResolver {
+  return {
+    resolve: async () => ({ org: ORG, role: 'viewer' }),
+    invalidate: () => {},
+    ...overrides,
+  };
+}
+
+// Convenience aliases — service overrides only; role comes from the resolver.
+function adminService(overrides: Partial<DashboardService> = {}): DashboardService {
+  return makeMockService(overrides);
 }
 
 function viewerService(overrides: Partial<DashboardService> = {}): DashboardService {
-  return makeMockService({
-    resolveOrgContext: async () => ({ org: ORG, role: 'viewer' }),
-    ...overrides,
-  });
+  return makeMockService(overrides);
 }
 
-function makeApp(service: DashboardService, getSession: GetSession) {
+function makeApp(service: DashboardService, getSession: GetSession, resolver: OrgContextResolver = adminResolver()) {
   const app = new Hono();
-  app.route('/api/dashboard', createDashboardRouter(service, getSession));
+  app.route('/api/dashboard', createDashboardRouter(service, getSession, resolver));
   return app;
+}
+
+// ── Mock FlagOps factory ────────────────────────────────────────────────────
+//
+// Returns a FlagOps whose `commit` records every event so tests can assert on
+// the event kind / payload that DashboardService dispatched. Read methods are
+// not exercised by these tests (the route mocks DashboardService directly when
+// it needs read behaviour) — they throw to make accidental reliance loud.
+
+interface RecordingFlagOps extends FlagOps {
+  events: DomainEvent[];
+}
+
+function makeNullFlagOps(): RecordingFlagOps {
+  const events: DomainEvent[] = [];
+  const notUsed = () => {
+    throw new Error('FlagOps.read not used by DashboardService unit tests');
+  };
+  return {
+    events,
+    commit: mock(async (event: DomainEvent) => {
+      events.push(event);
+    }),
+    read: {
+      flagsWithStates: notUsed as FlagOps['read']['flagsWithStates'],
+      environments: notUsed as FlagOps['read']['environments'],
+      members: notUsed as FlagOps['read']['members'],
+      removedMembers: notUsed as FlagOps['read']['removedMembers'],
+    },
+  };
 }
 
 const BASE = 'http://localhost/api/dashboard/acme';
@@ -112,31 +155,30 @@ describe('dashboard auth middleware', () => {
 
 describe('org middleware', () => {
   it('returns 404 when org slug not found', async () => {
-    const app = makeApp(
-      makeMockService({ resolveOrgContext: async () => null }),
-      adminSession,
-    );
+    const resolver = adminResolver({
+      resolve: async () => { throw new NotFoundError('Organization not found'); },
+    });
+    const app = makeApp(makeMockService(), adminSession, resolver);
     const res = await app.fetch(new Request('http://localhost/api/dashboard/nonexistent/flags'));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'Organization not found' });
   });
 
   it('returns 403 when org is suspended', async () => {
-    const suspended = { ...ORG, status: 'suspended' };
-    const app = makeApp(
-      makeMockService({ resolveOrgContext: async () => ({ org: suspended, role: 'admin' }) }),
-      adminSession,
-    );
+    const resolver = adminResolver({
+      resolve: async () => { throw new ForbiddenError('Organization suspended'); },
+    });
+    const app = makeApp(makeMockService(), adminSession, resolver);
     const res = await app.fetch(new Request(`${BASE}/flags`));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'Organization suspended' });
   });
 
   it('returns 403 when user is not a member', async () => {
-    const app = makeApp(
-      makeMockService({ resolveOrgContext: async () => ({ org: ORG, role: null }) }),
-      adminSession,
-    );
+    const resolver = adminResolver({
+      resolve: async () => { throw new ForbiddenError('Not a member of this organization'); },
+    });
+    const app = makeApp(makeMockService(), adminSession, resolver);
     const res = await app.fetch(new Request(`${BASE}/flags`));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'Not a member of this organization' });
@@ -179,6 +221,7 @@ describe('GET /api/dashboard/:orgSlug/flags', () => {
     const app = makeApp(
       viewerService({ getFlagsWithStates: async () => ({ flags: [], environments: [] }) }),
       viewerSession,
+      viewerResolver(),
     );
     const res = await app.fetch(new Request(`${BASE}/flags`));
     expect(res.status).toBe(200);
@@ -189,7 +232,7 @@ describe('GET /api/dashboard/:orgSlug/flags', () => {
 
 describe('POST /api/dashboard/:orgSlug/flags', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags`, {
         method: 'POST',
@@ -251,7 +294,7 @@ describe('POST /api/dashboard/:orgSlug/flags', () => {
 
 describe('PATCH /api/dashboard/:orgSlug/flags/:key', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag`, {
         method: 'PATCH',
@@ -300,7 +343,7 @@ describe('PATCH /api/dashboard/:orgSlug/flags/:key', () => {
 
 describe('DELETE /api/dashboard/:orgSlug/flags/:key', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag`, { method: 'DELETE' }),
     );
@@ -334,7 +377,7 @@ describe('DELETE /api/dashboard/:orgSlug/flags/:key', () => {
 
 describe('POST /api/dashboard/:orgSlug/flags/:key/toggle', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag/toggle`, {
         method: 'POST',
@@ -394,7 +437,7 @@ describe('POST /api/dashboard/:orgSlug/flags/:key/toggle', () => {
 
 describe('PUT /api/dashboard/:orgSlug/flags/:key/environments/:envId/country-rules', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/flags/my-flag/environments/env-1/country-rules`, {
         method: 'PUT',
@@ -498,6 +541,7 @@ describe('GET /api/dashboard/:orgSlug/environments', () => {
     const app = makeApp(
       viewerService({ getEnvironments: async () => [] }),
       viewerSession,
+      viewerResolver(),
     );
     const res = await app.fetch(new Request(`${BASE}/environments`));
     expect(res.status).toBe(200);
@@ -508,7 +552,7 @@ describe('GET /api/dashboard/:orgSlug/environments', () => {
 
 describe('POST /api/dashboard/:orgSlug/environments', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments`, {
         method: 'POST',
@@ -558,7 +602,7 @@ describe('POST /api/dashboard/:orgSlug/environments', () => {
 
 describe('PATCH /api/dashboard/:orgSlug/environments/:id', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments/e1`, {
         method: 'PATCH',
@@ -604,7 +648,7 @@ describe('PATCH /api/dashboard/:orgSlug/environments/:id', () => {
 
 describe('DELETE /api/dashboard/:orgSlug/environments/:id', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments/e1`, { method: 'DELETE' }),
     );
@@ -638,7 +682,7 @@ describe('DELETE /api/dashboard/:orgSlug/environments/:id', () => {
 
 describe('POST /api/dashboard/:orgSlug/environments/:id/rotate-key', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/environments/e1/rotate-key`, { method: 'POST' }),
     );
@@ -674,7 +718,7 @@ describe('POST /api/dashboard/:orgSlug/environments/:id/rotate-key', () => {
 
 describe('GET /api/dashboard/:orgSlug/members', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(new Request(`${BASE}/members`));
     expect(res.status).toBe(403);
   });
@@ -696,7 +740,7 @@ describe('GET /api/dashboard/:orgSlug/members', () => {
 
 describe('PATCH /api/dashboard/:orgSlug/members/:userId', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/members/u1`, {
         method: 'PATCH',
@@ -776,7 +820,7 @@ describe('PATCH /api/dashboard/:orgSlug/members/:userId', () => {
 
 describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
   it('returns 403 for viewer', async () => {
-    const app = makeApp(viewerService(), viewerSession);
+    const app = makeApp(viewerService(), viewerSession, viewerResolver());
     const res = await app.fetch(
       new Request(`${BASE}/members/u1`, { method: 'DELETE' }),
     );
@@ -830,85 +874,91 @@ describe('DELETE /api/dashboard/:orgSlug/members/:userId', () => {
   });
 });
 
-// ── DashboardService — toggleFlag Redis publish ───────────────────────────────
+// ── DashboardService — service boundary tests ─────────────────────────────────
 //
-// Queue-based mock DB where onConflictDoUpdate is non-terminal (returns the chain
-// so that .returning() can chain after it), unlike the org-oauth mock which makes
-// it terminal. This matches the toggleFlag + queryEnvironmentFlagStates call shapes.
+// Queue-based mock DB that simulates the Drizzle query builder chain.
+// onConflictDoUpdate is non-terminal so .returning() can chain after it.
 
-function makeServiceDb(results: unknown[][]): DbClient {
+function makeServiceDb(results: Array<unknown[] | Error>): DbClient {
   const queue = [...results];
-  function consume(): unknown[] {
-    return (queue.shift() ?? []) as unknown[];
+  function consume(): Promise<unknown[]> {
+    const next = queue.shift();
+    if (next instanceof Error) return Promise.reject(next);
+    return Promise.resolve((next ?? []) as unknown[]);
   }
   const chain: Record<string, unknown> = {};
   chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(consume()).then(resolve, reject);
+    consume().then(resolve, reject);
   for (const m of ['select', 'from', 'where', 'leftJoin', 'innerJoin', 'insert', 'values', 'onConflictDoUpdate', 'set', 'update', 'delete']) {
     chain[m] = () => chain;
   }
   for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing']) {
-    chain[m] = () => Promise.resolve(consume());
+    chain[m] = () => consume();
   }
+  chain.transaction = (fn: (tx: unknown) => Promise<unknown>) => fn(chain);
   return chain as unknown as DbClient;
 }
 
-describe('createDashboardService — toggleFlag Redis publish', () => {
-  it('publishes the full flag snapshot to flags:env:{environmentId} after a successful toggle', async () => {
+describe('createDashboardService — toggleFlag dispatches flag.toggled', () => {
+  it('commits a flag.toggled event with the result enabled state after a successful toggle', async () => {
     const db = makeServiceDb([
-      [{ id: 'flag-1' }],                                               // flags lookup (thenable)
-      [{ enabled: true }],                                               // flagStates upsert (returning)
-      [],                                                                // audit log insert (returning)
-      [{ key: 'feat-a', enabled: true }, { key: 'feat-b', enabled: false }], // queryEnvironmentFlagStates (orderBy)
+      [{ id: 'flag-1' }],  // flags lookup (thenable)
+      [{ enabled: true }],  // flagStates upsert (returning)
     ]);
 
-    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
-
-    const service = createDashboardService(db, notifyMock);
+    const flagOps = makeNullFlagOps();
+    const service = createDashboardService(db, flagOps);
     const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
 
     expect(result).toEqual({ enabled: true });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    const [envId, payload] = notifyMock.mock.calls[0] as unknown as [string, string];
-    expect(envId).toBe('env-1');
-    const parsed = JSON.parse(payload) as { flags: Array<{ key: string; enabled: boolean }> };
-    expect(parsed.flags).toEqual([
-      { key: 'feat-a', enabled: true },
-      { key: 'feat-b', enabled: false },
+    expect(flagOps.events).toEqual([
+      {
+        kind: 'flag.toggled',
+        orgId: 'org-1',
+        actorId: 'actor-1',
+        flagKey: 'feat-a',
+        environmentId: 'env-1',
+        enabled: true,
+      },
     ]);
   });
 
-  it('does not publish when no redisPublisher is provided', async () => {
+  it('throws NotFoundError and commits nothing when flag is missing', async () => {
     const db = makeServiceDb([
-      [{ id: 'flag-1' }],   // flags lookup
-      [{ enabled: false }], // flagStates upsert
-      [],                   // audit log
+      [],  // flags lookup returns empty → toggle returns null
     ]);
 
-    const service = createDashboardService(db);
-    const result = await service.toggleFlag('org-1', 'actor-1', 'feat-a', 'env-1');
-    expect(result).toEqual({ enabled: false });
+    const flagOps = makeNullFlagOps();
+    const service = createDashboardService(db, flagOps);
+    await expect(service.toggleFlag('org-1', 'actor-1', 'missing', 'env-1')).rejects.toThrow('Flag not found');
+    expect(flagOps.events).toEqual([]);
   });
 });
 
-describe('createDashboardService — updateCountryRules', () => {
-  it('persists rules, writes audit log with before/after, and notifies', async () => {
+describe('createDashboardService — updateCountryRules dispatches flag.country_rules', () => {
+  it('commits a flag.country_rules event with before/after arrays', async () => {
     const db = makeServiceDb([
-      [{ id: 'flag-1' }],                                      // flags lookup (thenable)
-      [{ allowedCountries: ['FR'] }],                           // current flagStates (limit)
-      [{ allowedCountries: ['US', 'CA'] }],                     // upsert returning
-      [],                                                       // audit log (returning)
-      [{ key: 'feat-a', enabled: true, allowedCountries: ['US', 'CA'] }], // queryEnvironmentFlagStates (orderBy)
+      [{ id: 'flag-1' }],                         // flags lookup (thenable)
+      [{ allowedCountries: ['FR'] }],              // current flagStates (limit)
+      [{ allowedCountries: ['US', 'CA'] }],        // upsert returning
     ]);
 
-    const notifyMock = mock((_envId: string, _payload: string) => Promise.resolve());
-    const service = createDashboardService(db, notifyMock);
+    const flagOps = makeNullFlagOps();
+    const service = createDashboardService(db, flagOps);
     const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', ['us', 'ca']);
 
     expect(result).toEqual({ countries: ['US', 'CA'] });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    const [envId] = notifyMock.mock.calls[0] as unknown as [string, string];
-    expect(envId).toBe('env-1');
+    expect(flagOps.events).toEqual([
+      {
+        kind: 'flag.country_rules',
+        orgId: 'org-1',
+        actorId: 'actor-1',
+        flagKey: 'feat-a',
+        environmentId: 'env-1',
+        before: ['FR'],
+        after: ['US', 'CA'],
+      },
+    ]);
   });
 
   it('clears rules when countries is empty', async () => {
@@ -916,50 +966,113 @@ describe('createDashboardService — updateCountryRules', () => {
       [{ id: 'flag-1' }],             // flags lookup (thenable)
       [{ allowedCountries: ['US'] }], // current state (limit)
       [{ allowedCountries: [] }],     // upsert returning
-      [],                             // audit log
     ]);
 
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullFlagOps());
     const result = await service.updateCountryRules('org-1', 'actor-1', 'feat-a', 'env-1', []);
     expect(result).toEqual({ countries: [] });
   });
 
-  it('returns NotFoundError when flag does not exist', async () => {
+  it('throws NotFoundError when flag does not exist', async () => {
     const db = makeServiceDb([
       [], // flags lookup returns empty
     ]);
 
-    const service = createDashboardService(db);
+    const service = createDashboardService(db, makeNullFlagOps());
     await expect(service.updateCountryRules('org-1', 'actor-1', 'missing', 'env-1', ['US'])).rejects.toThrow('Flag not found');
   });
 });
 
-describe('createDashboardService — updateEnvironmentOrigins scoped cache invalidation', () => {
-  it('calls clearAuthCache with the environment id, not a full flush', async () => {
+describe('createDashboardService — createFlag transaction boundary', () => {
+  it('creates flag and commits a flag.created event on success', async () => {
+    const flagRow = { id: 'f1', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date(), createdByUserId: 'u1' };
     const db = makeServiceDb([
-      [{ id: 'env-1', orgId: 'org-1', allowedOrigins: ['https://example.com'] }], // updateEnvironmentOrigins (thenable)
-      [], // audit log (returning)
+      [{ id: 'env-1' }], // queryOrgEnvironmentIds (thenable)
+      [flagRow],          // insertFlag (returning)
+      [],                 // backfillFlagStatesForFlag (onConflictDoNothing)
     ]);
-
-    const clearMock = mock((_envId: string) => {});
-    const service = createDashboardService(db, undefined, clearMock);
-    await service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-1', ['https://example.com']);
-
-    expect(clearMock).toHaveBeenCalledTimes(1);
-    const [envId] = clearMock.mock.calls[0] as unknown as [string];
-    expect(envId).toBe('env-1');
+    const flagOps = makeNullFlagOps();
+    const service = createDashboardService(db, flagOps);
+    const result = await service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' });
+    expect(result).toEqual(flagRow);
+    expect(flagOps.events).toEqual([
+      {
+        kind: 'flag.created',
+        orgId: 'org-1',
+        actorId: 'u1',
+        flagId: 'f1',
+        flagKey: 'beta',
+        name: 'Beta',
+      },
+    ]);
   });
 
-  it('throws NotFoundError and does not call clearAuthCache when environment is not found', async () => {
+  it('propagates error when backfill throws inside the transaction', async () => {
+    const flagRow = { id: 'f1', orgId: 'org-1', name: 'Beta', key: 'beta', description: '', createdAt: new Date(), createdByUserId: 'u1' };
+    const db = makeServiceDb([
+      [{ id: 'env-1' }],                          // queryOrgEnvironmentIds (thenable)
+      [flagRow],                                    // insertFlag (returning)
+      new Error('simulated backfill failure'),      // backfillFlagStatesForFlag (onConflictDoNothing)
+    ]);
+    const service = createDashboardService(db, makeNullFlagOps());
+    await expect(
+      service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
+    ).rejects.toThrow('simulated backfill failure');
+  });
+
+  it('maps unique constraint error from insertFlag to ConflictError', async () => {
+    const db = makeServiceDb([
+      [{ id: 'env-1' }],                                                    // queryOrgEnvironmentIds (thenable)
+      new Error('duplicate key value violates unique constraint "flags_key"'), // insertFlag (returning)
+    ]);
+    const service = createDashboardService(db, makeNullFlagOps());
+    await expect(
+      service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it('throws PreconditionError when no environments exist', async () => {
+    const db = makeServiceDb([
+      [], // queryOrgEnvironmentIds returns empty
+    ]);
+    const service = createDashboardService(db, makeNullFlagOps());
+    await expect(
+      service.createFlag('org-1', 'u1', { name: 'Beta', key: 'beta', description: '' }),
+    ).rejects.toThrow('Create an environment before creating flags');
+  });
+});
+
+describe('createDashboardService — updateEnvironmentOrigins dispatches env.origins_updated', () => {
+  it('commits an env.origins_updated event so FlagOps evicts the SDK auth cache', async () => {
+    const db = makeServiceDb([
+      [{ id: 'env-1', orgId: 'org-1', allowedOrigins: ['https://example.com'] }], // updateEnvironmentOrigins (thenable)
+    ]);
+
+    const flagOps = makeNullFlagOps();
+    const service = createDashboardService(db, flagOps);
+    await service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-1', ['https://example.com']);
+
+    expect(flagOps.events).toEqual([
+      {
+        kind: 'env.origins_updated',
+        orgId: 'org-1',
+        actorId: 'actor-1',
+        environmentId: 'env-1',
+        allowedOrigins: ['https://example.com'],
+      },
+    ]);
+  });
+
+  it('throws NotFoundError and commits nothing when environment is not found', async () => {
     const db = makeServiceDb([
       [], // updateEnvironmentOrigins returns nothing — not found
     ]);
 
-    const clearMock = mock((_envId: string) => {});
-    const service = createDashboardService(db, undefined, clearMock);
+    const flagOps = makeNullFlagOps();
+    const service = createDashboardService(db, flagOps);
     await expect(
       service.updateEnvironmentOrigins('org-1', 'actor-1', 'env-missing', ['https://example.com']),
     ).rejects.toThrow('Environment not found');
-    expect(clearMock).not.toHaveBeenCalled();
+    expect(flagOps.events).toEqual([]);
   });
 });

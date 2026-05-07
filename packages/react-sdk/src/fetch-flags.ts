@@ -43,14 +43,23 @@ export async function fetchFlags(
     const data = (await res.json()) as {
       flags: Array<{ key: string; enabled: boolean }>;
     };
-
-    const map: Record<string, boolean> = {};
-    for (const f of data.flags) {
-      map[f.key] = f.enabled;
-    }
-    return map;
+    return flagsArrayToRecord(data.flags);
   } catch {
     console.warn("Vexillo: fetchFlags failed. Returning empty flags.");
     return {};
   }
+}
+
+/**
+ * Decodes the canonical SDK wire shape (`Array<{ key, enabled }>`) into the
+ * flat `Record<string, boolean>` used by every consumer in this package.
+ *
+ * @internal
+ */
+export function flagsArrayToRecord(
+  arr: Array<{ key: string; enabled: boolean }>,
+): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const f of arr) out[f.key] = f.enabled;
+  return out;
 }

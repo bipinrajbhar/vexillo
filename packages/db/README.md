@@ -26,7 +26,8 @@ Run these from the repo root with `pnpm --filter @vexillo/db <script>`.
 | Table | Description |
 |-------|-------------|
 | `organizations` | Tenants — name, slug, Okta OAuth config (client secret stored AES-256-GCM encrypted), status (`active` / `suspended`) |
-| `organization_members` | Per-org RBAC — links users to orgs with a role (`admin` / `viewer`) |
+| `organization_members` | Per-org RBAC — links users to orgs with a role (`admin` / `viewer`); `removedAt` for soft-delete |
+| `invites` | Pending org invitations — `tokenHash`, role, expiry, optional `acceptedAt` |
 
 **Auth (BetterAuth managed)**
 

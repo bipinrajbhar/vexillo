@@ -10,7 +10,7 @@ interface AppProps {
 
 export function App({ client, flagKeys }: AppProps) {
   return (
-    <VexilloClientProvider client={client} streaming>
+    <VexilloClientProvider client={client}>
       <main
         style={{ fontFamily: "sans-serif", padding: "2rem", maxWidth: "600px" }}
       >

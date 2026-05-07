@@ -1,610 +1,243 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, it, expect } from 'bun:test';
 import { Hono } from 'hono';
 import { createOrgOAuthRouter } from './org-oauth';
-import type { Auth } from '../lib/auth';
-import { encryptSecret } from '../lib/okta-crypto';
+import { STATE_COOKIE, type OrgOAuthService } from '../lib/org-oauth';
 
-// Fixed test key — 64 hex chars = 32 bytes
-process.env.OKTA_SECRET_KEY = 'a'.repeat(64);
+// The route's only job is HTTP plumbing: serializing CookieSpec into Set-Cookie
+// headers, dispatching GET vs POST callback bodies, and mapping authorize
+// failure reasons to status codes / error reasons to /?error= redirects.
+// Domain behavior — PKCE, OIDC discovery, token exchange, JIT provisioning —
+// is covered by the boundary tests in lib/org-oauth/. This file uses an
+// in-memory stub service so the assertions stay focused on the HTTP boundary.
 
-// ── Mock DB ───────────────────────────────────────────────────────────────────
+const ALL_REJECT: OrgOAuthService = {
+  beginAuthorize: async () => ({ kind: 'failure', reason: 'org_not_found' }),
+  completeCallback: async () => ({
+    kind: 'failure',
+    reason: 'invalid_callback',
+    clearCookies: [],
+  }),
+  getOrgMeta: async () => ({ kind: 'failure', reason: 'org_not_found' }),
+  invalidateIssuer: () => {},
+};
 
-// Chainable mock DB — results consumed FIFO from the queue.
-function makeMockDb(staticResults: unknown[][] = []) {
-  const queue = [...staticResults];
-
-  function consume(): unknown[] {
-    return (queue.shift() ?? []) as unknown[];
-  }
-
-  const chain: Record<string, unknown> = {};
-
-  chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(consume()).then(resolve, reject);
-
-  for (const m of [
-    'select', 'from', 'where', 'leftJoin', 'innerJoin',
-    'insert', 'values', 'update', 'set', 'delete',
-  ]) {
-    chain[m] = () => chain;
-  }
-
-  for (const m of ['limit', 'orderBy', 'returning', 'onConflictDoNothing', 'onConflictDoUpdate']) {
-    chain[m] = () => Promise.resolve(consume());
-  }
-
-  return chain as unknown as Parameters<typeof createOrgOAuthRouter>[0];
+function stubService(overrides: Partial<OrgOAuthService> = {}): OrgOAuthService {
+  return { ...ALL_REJECT, ...overrides };
 }
 
-// ── Mock Auth ─────────────────────────────────────────────────────────────────
-
-const MOCK_SECRET = 'test-secret-for-org-oauth-signing-32ch!';
-
-function makeMockAuth(overrides?: {
-  findUserByEmail?: (email: string) => Promise<{ user: { id: string; email: string; name: string; isSuperAdmin?: boolean }; accounts: [] } | null>;
-  createUser?: (user: Record<string, unknown>) => Promise<{ id: string } & Record<string, unknown>>;
-  createSession?: (userId: string) => Promise<{ token: string }>;
-}): Auth {
-  return {
-    $context: Promise.resolve({
-      secret: MOCK_SECRET,
-      authCookies: {
-        sessionToken: {
-          name: 'better-auth.session_token',
-          attributes: {
-            secure: false,
-            sameSite: 'lax',
-            path: '/',
-            httpOnly: true,
-            maxAge: 604800,
-          },
-        },
-      },
-      internalAdapter: {
-        findUserByEmail: overrides?.findUserByEmail ?? (async () => null),
-        createUser: overrides?.createUser ?? (async (u) => ({ id: 'user-new', ...u })),
-        createSession: overrides?.createSession ?? (async () => ({ token: 'mock-session-token' })),
-      },
-    }),
-  } as unknown as Auth;
-}
-
-// ── App factory ───────────────────────────────────────────────────────────────
-
-function makeApp(
-  db: Parameters<typeof createOrgOAuthRouter>[0],
-  auth: Auth,
-) {
+function makeApp(svc: OrgOAuthService): Hono {
   const app = new Hono();
-  app.route('/api/auth/org-oauth', createOrgOAuthRouter(db, auth));
+  app.route('/api/auth/org-oauth', createOrgOAuthRouter(svc));
   return app;
 }
 
 const BASE = 'http://localhost/api/auth/org-oauth';
 
-// ── Test fixtures ─────────────────────────────────────────────────────────────
+// ── /:orgSlug/authorize ──────────────────────────────────────────────────────
 
-const ACTIVE_ORG_BASE = {
-  id: 'org-1',
-  name: 'Acme',
-  slug: 'acme',
-  status: 'active',
-  oktaClientId: 'okta-client-id',
-  oktaClientSecret: 'placeholder', // replaced in beforeAll with encrypted value
-  oktaIssuer: 'https://acme.okta.com',
-  createdAt: new Date(),
-};
+describe('GET /:orgSlug/authorize', () => {
+  it('serializes CookieSpec into a Set-Cookie header on the redirect response', async () => {
+    const app = makeApp(
+      stubService({
+        beginAuthorize: async () => ({
+          kind: 'redirect',
+          location: 'https://idp/oauth?x=1',
+          setCookies: [
+            {
+              name: STATE_COOKIE,
+              value: 'signed-state',
+              attrs: { maxAge: 600, httpOnly: true, secure: false, sameSite: 'Lax', path: '/' },
+            },
+          ],
+        }),
+      }),
+    );
 
-let ACTIVE_ORG = ACTIVE_ORG_BASE;
+    const res = await app.fetch(new Request(`${BASE}/acme/authorize`));
 
-beforeAll(async () => {
-  ACTIVE_ORG = { ...ACTIVE_ORG_BASE, oktaClientSecret: await encryptSecret('okta-client-secret') };
-});
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('https://idp/oauth?x=1');
+    const setCookie = res.headers.get('set-cookie')!;
+    expect(setCookie).toContain(`${STATE_COOKIE}=signed-state`);
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Lax');
+    expect(setCookie).not.toContain('Secure');
+  });
 
-const SUSPENDED_ORG = { ...ACTIVE_ORG_BASE, status: 'suspended' };
-
-const MOCK_DISCOVERY = {
-  authorization_endpoint: 'https://acme.okta.com/oauth2/v1/authorize',
-  token_endpoint: 'https://acme.okta.com/oauth2/v1/token',
-  userinfo_endpoint: 'https://acme.okta.com/oauth2/v1/userinfo',
-};
-
-// ── GET /:orgSlug/authorize ────────────────────────────────────────────────────
-
-describe('GET /api/auth/org-oauth/:orgSlug/authorize', () => {
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), makeMockAuth());
-    const res = await app.fetch(new Request(`${BASE}/nonexistent/authorize`));
+  it('maps org_not_found → 404', async () => {
+    const app = makeApp(
+      stubService({
+        beginAuthorize: async () => ({ kind: 'failure', reason: 'org_not_found' }),
+      }),
+    );
+    const res = await app.fetch(new Request(`${BASE}/missing/authorize`));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'Organization not found' });
   });
 
-  it('returns 403 when org is suspended', async () => {
-    const app = makeApp(makeMockDb([[SUSPENDED_ORG]]), makeMockAuth());
-    const res = await app.fetch(new Request(`${BASE}/acme/authorize`));
+  it('maps org_suspended → 403', async () => {
+    const app = makeApp(
+      stubService({
+        beginAuthorize: async () => ({ kind: 'failure', reason: 'org_suspended' }),
+      }),
+    );
+    const res = await app.fetch(new Request(`${BASE}/x/authorize`));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'Organization suspended' });
   });
 
-  it('returns 502 when OIDC discovery fails', async () => {
-    // Org found, but fetch throws
-    let fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
-      (async () => { throw new Error('network error'); }) as unknown as typeof globalThis.fetch,
+  it('maps oidc_discovery_failed → 502', async () => {
+    const app = makeApp(
+      stubService({
+        beginAuthorize: async () => ({ kind: 'failure', reason: 'oidc_discovery_failed' }),
+      }),
     );
-    try {
-      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), makeMockAuth());
-      const res = await app.fetch(new Request(`${BASE}/acme/authorize`));
-      expect(res.status).toBe(502);
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    const res = await app.fetch(new Request(`${BASE}/x/authorize`));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'Failed to fetch Okta configuration' });
   });
 
-  it('redirects to Okta with correct query params when org is valid', async () => {
-    let fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
-      (async (url: string | URL | Request) => {
-        if (String(url).includes('openid-configuration')) {
-          return new Response(JSON.stringify(MOCK_DISCOVERY), {
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        return new Response('not found', { status: 404 });
-      }) as unknown as typeof globalThis.fetch,
+  it('forwards the next= query param to the service', async () => {
+    let seenNext: string | undefined;
+    const app = makeApp(
+      stubService({
+        beginAuthorize: async (req) => {
+          seenNext = req.next;
+          return { kind: 'failure', reason: 'org_not_found' };
+        },
+      }),
     );
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), makeMockAuth());
-      const res = await app.fetch(new Request(`${BASE}/acme/authorize?next=/org/acme/flags`));
-
-      expect(res.status).toBe(302);
-      const location = res.headers.get('Location')!;
-      const authUrl = new URL(location);
-
-      expect(authUrl.origin + authUrl.pathname).toBe('https://acme.okta.com/oauth2/v1/authorize');
-      expect(authUrl.searchParams.get('client_id')).toBe('okta-client-id');
-      expect(authUrl.searchParams.get('response_type')).toBe('code');
-      expect(authUrl.searchParams.get('scope')).toBe('openid email profile');
-      expect(authUrl.searchParams.get('redirect_uri')).toBe('http://localhost:3000/api/auth/org-oauth/callback');
-      expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256');
-      expect(authUrl.searchParams.get('code_challenge')).toBeTruthy();
-      expect(authUrl.searchParams.get('state')).toBeTruthy(); // nonce
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it('sets a signed org_oauth_state cookie on valid org', async () => {
-    let fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
-      (async () =>
-        new Response(JSON.stringify(MOCK_DISCOVERY), {
-          headers: { 'Content-Type': 'application/json' },
-        })) as unknown as typeof globalThis.fetch,
-    );
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), makeMockAuth());
-      const res = await app.fetch(new Request(`${BASE}/acme/authorize?next=/org/acme/flags`));
-
-      expect(res.status).toBe(302);
-      const setCookie = res.headers.get('Set-Cookie') ?? '';
-      expect(setCookie).toContain('org_oauth_state=');
-      expect(setCookie).toContain('HttpOnly');
-      expect(setCookie).toContain('Max-Age=600');
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    await app.fetch(new Request(`${BASE}/acme/authorize?next=%2Fdashboard`));
+    expect(seenNext).toBe('/dashboard');
   });
 });
 
-// ── GET /callback ─────────────────────────────────────────────────────────────
+// ── /callback ────────────────────────────────────────────────────────────────
 
-describe('GET /api/auth/org-oauth/callback', () => {
-  it('redirects with error when code is missing', async () => {
-    const app = makeApp(makeMockDb(), makeMockAuth());
-    const res = await app.fetch(new Request(`${BASE}/callback?state=some-nonce`));
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=invalid_callback');
-  });
-
-  it('redirects with error when state cookie is absent', async () => {
-    const app = makeApp(makeMockDb(), makeMockAuth());
-    const res = await app.fetch(new Request(`${BASE}/callback?code=abc&state=some-nonce`));
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=state_missing');
-  });
-
-  it('redirects with error when state cookie signature is invalid', async () => {
-    const app = makeApp(makeMockDb(), makeMockAuth());
-    const res = await app.fetch(
-      new Request(`${BASE}/callback?code=abc&state=some-nonce`, {
-        headers: { Cookie: 'org_oauth_state=tampered-value-without-valid-signature' },
+describe('on(GET|POST) /callback', () => {
+  it('dispatches GET query params to the service', async () => {
+    let seen: { code?: string; state?: string; stateCookie?: string } | undefined;
+    const app = makeApp(
+      stubService({
+        completeCallback: async (req) => {
+          seen = { code: req.code, state: req.state, stateCookie: req.stateCookie };
+          return { kind: 'failure', reason: 'invalid_state', clearCookies: [] };
+        },
       }),
     );
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=invalid_state');
-  });
 
-  it('redirects with error when state nonce does not match cookie', async () => {
-    // Build a valid signed cookie with nonce "correct-nonce", but send state="wrong-nonce"
-    const { signedCookieForTest } = await buildTestStateCookie({
-      nonce: 'correct-nonce',
-      orgSlug: 'acme',
-      next: '/org/acme/flags',
-      codeVerifier: 'cv123',
-    });
-    const app = makeApp(makeMockDb(), makeMockAuth());
-    const res = await app.fetch(
-      new Request(`${BASE}/callback?code=abc&state=wrong-nonce`, {
-        headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+    await app.fetch(
+      new Request(`${BASE}/callback?code=abc&state=def`, {
+        headers: { Cookie: `${STATE_COOKIE}=cookie-val` },
       }),
     );
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=state_mismatch');
+
+    expect(seen?.code).toBe('abc');
+    expect(seen?.state).toBe('def');
+    expect(seen?.stateCookie).toBe('cookie-val');
   });
 
-  it('returns error when org is not found after state verification', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-abc',
-      orgSlug: 'ghost-org',
-      next: '/',
-      codeVerifier: 'cv',
-    });
-    // DB returns empty (org not found) — limit(1) on limit pops []
-    const app = makeApp(makeMockDb([[]]), makeMockAuth());
-    const res = await app.fetch(
-      new Request(`${BASE}/callback?code=abc&state=${nonce}`, {
-        headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+  it('dispatches POST form bodies to the service', async () => {
+    let seen: { code?: string; state?: string } | undefined;
+    const app = makeApp(
+      stubService({
+        completeCallback: async (req) => {
+          seen = { code: req.code, state: req.state };
+          return { kind: 'failure', reason: 'invalid_state', clearCookies: [] };
+        },
       }),
     );
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=org_not_found');
-  });
 
-  it('creates session and sets session cookie on successful auth', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-xyz',
-      orgSlug: 'acme',
-      next: '/org/acme/flags',
-      codeVerifier: 'verifier123',
-    });
-
-    let fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
-      (async (url: string | URL | Request) => {
-        const urlStr = String(url);
-        if (urlStr.includes('openid-configuration')) {
-          return new Response(JSON.stringify(MOCK_DISCOVERY), {
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        if (urlStr.includes('/token')) {
-          return new Response(
-            JSON.stringify({ access_token: 'mock-access-token', token_type: 'Bearer' }),
-            { headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        if (urlStr.includes('/userinfo')) {
-          return new Response(
-            JSON.stringify({ sub: 'user-sub', email: 'alice@acme.com', name: 'Alice' }),
-            { headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        return new Response('not found', { status: 404 });
-      }) as unknown as typeof globalThis.fetch,
+    await app.fetch(
+      new Request(`${BASE}/callback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'code=postcode&state=poststate',
+      }),
     );
 
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      const sessionToken = 'generated-session-token-abc';
-      const auth = makeMockAuth({
-        findUserByEmail: async () => null, // new user
-        createUser: async () => ({ id: 'user-new', email: 'alice@acme.com', name: 'Alice' }),
-        createSession: async () => ({ token: sessionToken }),
-      });
+    expect(seen?.code).toBe('postcode');
+    expect(seen?.state).toBe('poststate');
+  });
 
-      // Queue: org lookup, adminCount query (new org → 0 admins → new user gets admin)
-      const app = makeApp(makeMockDb([[ACTIVE_ORG], [{ adminCount: 0 }]]), auth);
-      const res = await app.fetch(
-        new Request(`${BASE}/callback?code=authcode&state=${nonce}`, {
-          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+  it('redirects to /?error=<reason> on failure', async () => {
+    const app = makeApp(
+      stubService({
+        completeCallback: async () => ({
+          kind: 'failure',
+          reason: 'access_revoked',
+          clearCookies: [
+            {
+              name: STATE_COOKIE,
+              value: '',
+              attrs: { maxAge: 0, httpOnly: true, secure: false, sameSite: 'Lax', path: '/' },
+            },
+          ],
         }),
-      );
-
-      expect(res.status).toBe(302);
-      expect(res.headers.get('Location')).toBe('/org/acme/flags');
-
-      // Session cookie should be set
-      const cookies = res.headers.getSetCookie?.() ?? [res.headers.get('Set-Cookie') ?? ''];
-      const sessionCookie = cookies.find((c) => c.startsWith('better-auth.session_token='));
-      expect(sessionCookie).toBeTruthy();
-      expect(sessionCookie).toContain('HttpOnly');
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it('uses existing user when email already registered', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-existing',
-      orgSlug: 'acme',
-      next: '/',
-      codeVerifier: 'cv',
-    });
-
-    let fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
-      (async (url: string | URL | Request) => {
-        const urlStr = String(url);
-        if (urlStr.includes('openid-configuration'))
-          return new Response(JSON.stringify(MOCK_DISCOVERY), { headers: { 'Content-Type': 'application/json' } });
-        if (urlStr.includes('/token'))
-          return new Response(JSON.stringify({ access_token: 'tok', token_type: 'Bearer' }), { headers: { 'Content-Type': 'application/json' } });
-        if (urlStr.includes('/userinfo'))
-          return new Response(JSON.stringify({ sub: 'sub', email: 'bob@acme.com', name: 'Bob' }), { headers: { 'Content-Type': 'application/json' } });
-        return new Response('not found', { status: 404 });
-      }) as unknown as typeof globalThis.fetch,
+      }),
     );
 
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      let createUserCalled = false;
-      const auth = makeMockAuth({
-        findUserByEmail: async () => ({ user: { id: 'existing-user', email: 'bob@acme.com', name: 'Bob' }, accounts: [] }),
-        createUser: async () => { createUserCalled = true; return { id: 'should-not-be-called' }; },
-        createSession: async () => ({ token: 'sess-tok' }),
-      });
+    const res = await app.fetch(new Request(`${BASE}/callback?code=c&state=s`));
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/?error=access_revoked');
+    expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
 
-      const app = makeApp(makeMockDb([[ACTIVE_ORG]]), auth);
-      await app.fetch(
-        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
-          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
+  it('redirects to next + sets all cookies on the success path', async () => {
+    const app = makeApp(
+      stubService({
+        completeCallback: async () => ({
+          kind: 'redirect',
+          location: '/landing',
+          setCookies: [
+            {
+              name: 'better-auth.session_token',
+              value: 'signed-token',
+              attrs: { maxAge: 604800, httpOnly: true, secure: false, sameSite: 'Lax', path: '/' },
+            },
+            {
+              name: STATE_COOKIE,
+              value: '',
+              attrs: { maxAge: 0, httpOnly: true, secure: false, sameSite: 'Lax', path: '/' },
+            },
+          ],
         }),
-      );
+      }),
+    );
 
-      expect(createUserCalled).toBe(false);
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    const res = await app.fetch(new Request(`${BASE}/callback?code=c&state=s`));
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/landing');
+    const setCookie = res.headers.get('set-cookie')!;
+    expect(setCookie).toContain('better-auth.session_token=signed-token');
+    expect(setCookie).toContain(`${STATE_COOKIE}=`);
   });
 });
 
-// ── SUPER_ADMIN_EMAILS auto-promotion + post-auth redirect ────────────────────
+// ── /:orgSlug/meta ───────────────────────────────────────────────────────────
 
-describe('SUPER_ADMIN_EMAILS auto-promotion and redirect', () => {
-  // Shared fetch mock: returns discovery, token, and userinfo for alice@acme.com
-  function mockFetchForAlice() {
-    return spyOn(globalThis, 'fetch').mockImplementation(
-      (async (url: string | URL | Request) => {
-        const urlStr = String(url);
-        if (urlStr.includes('openid-configuration'))
-          return new Response(JSON.stringify(MOCK_DISCOVERY), { headers: { 'Content-Type': 'application/json' } });
-        if (urlStr.includes('/token'))
-          return new Response(JSON.stringify({ access_token: 'tok', token_type: 'Bearer' }), { headers: { 'Content-Type': 'application/json' } });
-        if (urlStr.includes('/userinfo'))
-          return new Response(JSON.stringify({ sub: 'sub', email: 'alice@acme.com', name: 'Alice' }), { headers: { 'Content-Type': 'application/json' } });
-        return new Response('not found', { status: 404 });
-      }) as unknown as typeof globalThis.fetch,
+describe('GET /:orgSlug/meta', () => {
+  it('returns the org meta on success', async () => {
+    const app = makeApp(
+      stubService({
+        getOrgMeta: async () => ({
+          kind: 'ok',
+          org: { name: 'Acme', slug: 'acme', status: 'active' },
+        }),
+      }),
     );
-  }
 
-  it('promotes user and redirects to next when email matches SUPER_ADMIN_EMAILS', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-promote',
-      orgSlug: 'acme',
-      next: '/org/acme/flags',
-      codeVerifier: 'cv',
+    const res = await app.fetch(new Request(`${BASE}/acme/meta`));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      org: { name: 'Acme', slug: 'acme', status: 'active' },
     });
-
-    let fetchSpy = mockFetchForAlice();
-
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      process.env.SUPER_ADMIN_EMAILS = 'alice@acme.com,other@example.com';
-
-      // DB queue: [ACTIVE_ORG for org lookup, [] for update call]
-      const db = makeMockDb([[ACTIVE_ORG], []]);
-      // Track whether the update chain was awaited
-      const originalUpdate = (db as unknown as Record<string, unknown>).update;
-      let capturedUpdate = false;
-      (db as unknown as Record<string, unknown>).update = (...args: unknown[]) => {
-        capturedUpdate = true;
-        return (originalUpdate as (...a: unknown[]) => unknown)(...args);
-      };
-
-      const auth = makeMockAuth({
-        findUserByEmail: async () => null, // new user
-        createUser: async () => ({ id: 'user-alice', email: 'alice@acme.com', name: 'Alice' }),
-        createSession: async () => ({ token: 'sess-tok' }),
-      });
-
-      const app = makeApp(db, auth);
-      const res = await app.fetch(
-        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
-          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
-        }),
-      );
-
-      expect(res.status).toBe(302);
-      expect(res.headers.get('Location')).toBe('/org/acme/flags');
-      expect(capturedUpdate).toBe(true);
-    } finally {
-      fetchSpy.mockRestore();
-      delete process.env.SUPER_ADMIN_EMAILS;
-    }
   });
 
-  it('does not promote and redirects to next when email does not match SUPER_ADMIN_EMAILS', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-no-promote',
-      orgSlug: 'acme',
-      next: '/org/acme/flags',
-      codeVerifier: 'cv',
-    });
-
-    let fetchSpy = mockFetchForAlice();
-
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      process.env.SUPER_ADMIN_EMAILS = 'notmatch@example.com';
-
-      // Queue: org lookup, adminCount query (org has admins → new user gets viewer)
-      const db = makeMockDb([[ACTIVE_ORG], [{ adminCount: 1 }]]);
-      let updateCalled = false;
-      const originalUpdate = (db as unknown as Record<string, unknown>).update;
-      (db as unknown as Record<string, unknown>).update = (...args: unknown[]) => {
-        updateCalled = true;
-        return (originalUpdate as (...a: unknown[]) => unknown)(...args);
-      };
-
-      const auth = makeMockAuth({
-        findUserByEmail: async () => null,
-        createUser: async () => ({ id: 'user-alice', email: 'alice@acme.com', name: 'Alice' }),
-        createSession: async () => ({ token: 'sess-tok' }),
-      });
-
-      const app = makeApp(db, auth);
-      const res = await app.fetch(
-        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
-          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
-        }),
-      );
-
-      expect(res.status).toBe(302);
-      expect(res.headers.get('Location')).toBe('/org/acme/flags');
-      expect(updateCalled).toBe(false);
-    } finally {
-      fetchSpy.mockRestore();
-      delete process.env.SUPER_ADMIN_EMAILS;
-    }
-  });
-
-  it('redirects existing super admin to next without email match', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-existing-sa',
-      orgSlug: 'acme',
-      next: '/org/acme/flags',
-      codeVerifier: 'cv',
-    });
-
-    let fetchSpy = mockFetchForAlice();
-
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      // SUPER_ADMIN_EMAILS does not contain alice's email
-      process.env.SUPER_ADMIN_EMAILS = 'someone-else@example.com';
-
-      const auth = makeMockAuth({
-        findUserByEmail: async () => ({
-          user: { id: 'user-alice', email: 'alice@acme.com', name: 'Alice', isSuperAdmin: true },
-          accounts: [],
-        }),
-        createSession: async () => ({ token: 'sess-tok' }),
-      });
-
-      // Queue: org lookup, adminCount query (org has admins → existing user gets viewer if new member)
-      const app = makeApp(makeMockDb([[ACTIVE_ORG], [{ adminCount: 1 }]]), auth);
-      const res = await app.fetch(
-        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
-          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
-        }),
-      );
-
-      expect(res.status).toBe(302);
-      expect(res.headers.get('Location')).toBe('/org/acme/flags');
-    } finally {
-      fetchSpy.mockRestore();
-      delete process.env.SUPER_ADMIN_EMAILS;
-    }
-  });
-
-  it('promotion is idempotent — already-super-admin user re-signs in without error', async () => {
-    const { signedCookieForTest, nonce } = await buildTestStateCookie({
-      nonce: 'nonce-idem',
-      orgSlug: 'acme',
-      next: '/',
-      codeVerifier: 'cv',
-    });
-
-    let fetchSpy = mockFetchForAlice();
-
-    try {
-      process.env.BETTER_AUTH_URL = 'http://localhost:3000';
-      process.env.SUPER_ADMIN_EMAILS = 'alice@acme.com';
-
-      // DB: org lookup + update call
-      const db = makeMockDb([[ACTIVE_ORG], []]);
-      const auth = makeMockAuth({
-        findUserByEmail: async () => ({
-          user: { id: 'user-alice', email: 'alice@acme.com', name: 'Alice', isSuperAdmin: true },
-          accounts: [],
-        }),
-        createSession: async () => ({ token: 'sess-tok' }),
-      });
-
-      const app = makeApp(db, auth);
-      const res = await app.fetch(
-        new Request(`${BASE}/callback?code=code&state=${nonce}`, {
-          headers: { Cookie: `org_oauth_state=${signedCookieForTest}` },
-        }),
-      );
-
-      expect(res.status).toBe(302);
-      expect(res.headers.get('Location')).toBe('/');
-    } finally {
-      fetchSpy.mockRestore();
-      delete process.env.SUPER_ADMIN_EMAILS;
-    }
-  });
-});
-
-// ── GET /:orgSlug/meta ────────────────────────────────────────────────────────
-
-describe('GET /api/auth/org-oauth/:orgSlug/meta', () => {
-  it('returns 404 when org not found', async () => {
-    const app = makeApp(makeMockDb([[]]), makeMockAuth());
-    const res = await app.fetch(new Request(`${BASE}/ghost/meta`));
+  it('maps org_not_found → 404', async () => {
+    const app = makeApp(stubService());
+    const res = await app.fetch(new Request(`${BASE}/missing/meta`));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'Organization not found' });
   });
-
-  it('returns org name and status without secrets', async () => {
-    const orgRow = { name: 'Acme', slug: 'acme', status: 'active' };
-    const app = makeApp(makeMockDb([[orgRow]]), makeMockAuth());
-    const res = await app.fetch(new Request(`${BASE}/acme/meta`));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { org: typeof orgRow };
-    expect(body.org.name).toBe('Acme');
-    expect(body.org.slug).toBe('acme');
-    expect(body.org.status).toBe('active');
-  });
 });
-
-// ── Test helper — produce a valid signed state cookie ─────────────────────────
-
-/**
- * Replicates the signing done by the authorize endpoint so that test cases
- * for the callback can provide a legitimate state cookie without needing to
- * call the authorize endpoint first.
- */
-async function buildTestStateCookie(state: {
-  nonce: string;
-  orgSlug: string;
-  next: string;
-  codeVerifier: string;
-}): Promise<{ signedCookieForTest: string; nonce: string }> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(MOCK_SECRET),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const value = JSON.stringify(state);
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value));
-  const signature = btoa(String.fromCharCode(...new Uint8Array(sig)));
-  // The cookie header value is encodeURIComponent(`${value}.${signature}`)
-  // but Hono's getCookie will decode it before returning to our handler.
-  // To simulate what Hono sees after decoding, we pass the raw decoded form
-  // to getCookie by setting the Cookie header with the ENCODED form.
-  // So signedCookieForTest is what goes into the Cookie header (encoded).
-  const signedCookieForTest = encodeURIComponent(`${value}.${signature}`);
-  return { signedCookieForTest, nonce: state.nonce };
-}
